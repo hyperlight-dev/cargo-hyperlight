@@ -3,6 +3,11 @@
 
 extern crate alloc;
 
+const _: () = {
+    #[cfg(not(hyperlight))]
+    compile_error!("This crate can only be compiled for hyperlight targets");
+};
+
 use alloc::format;
 use alloc::vec::Vec;
 

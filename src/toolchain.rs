@@ -29,6 +29,8 @@ pub fn prepare(args: &Args) -> Result<()> {
         .arg("metadata")
         .manifest_path(&args.manifest_path)
         .arg("--format-version=1")
+        .append_rustflags("--cfg=hyperlight")
+        .append_rustflags("--check-cfg=cfg(hyperlight)")
         .checked_output()
         .context("Failed to get cargo metadata")?;
 
