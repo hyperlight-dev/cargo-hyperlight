@@ -477,6 +477,9 @@ impl Command {
         if !self.inherit_envs {
             command.env_clear();
         }
+        if let Some(rustup_toolchain) = &self.cargo.rustup_toolchain {
+            command.env("RUSTUP_TOOLCHAIN", rustup_toolchain);
+        }
         for (k, v) in self.get_envs() {
             match v {
                 Some(v) => command.env(k, v),
