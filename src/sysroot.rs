@@ -33,10 +33,12 @@ pub fn build(args: &Args) -> Result<()> {
                 "pre-link-args": {
                     "gnu-lld": ["-znostart-stop-gc"],
                 },
+                "features": "-mmx,+sse,+sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2,-soft-float"
             }) else {
                 unreachable!()
             };
             spec.extend(custom);
+            spec.remove("rustc-abi");
             spec
         }
         triplet => bail!(
