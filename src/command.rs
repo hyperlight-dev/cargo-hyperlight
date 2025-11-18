@@ -8,6 +8,7 @@ use std::process::Command as StdCommand;
 use std::{env, iter};
 
 use anyhow::{Context, Result};
+use os_str_bytes::OsStrBytesExt;
 
 use crate::CargoCommandExt;
 use crate::cargo_cmd::{CargoBinary, CargoCmd as _, find_cargo, merge_env};
@@ -55,6 +56,7 @@ pub struct Command {
     args: Vec<OsString>,
     /// Environment variable mappings to set for the child process
     inherit_envs: bool,
+    inherit_cargo_envs: bool,
     envs: BTreeMap<OsString, Option<OsString>>,
     // Working directory for the child process
     current_dir: Option<PathBuf>,
@@ -122,6 +124,7 @@ impl Command {
             args: Vec::new(),
             envs: BTreeMap::new(),
             inherit_envs: true,
+            inherit_cargo_envs: true,
             current_dir: None,
         })
     }
@@ -282,6 +285,39 @@ impl Command {
     pub fn env_clear(&mut self) -> &mut Self {
         self.inherit_envs = false;
         self.envs.clear();
+        self
+    }
+
+    /// Clears all `CARGO_` environment variables that will be set for the child process.
+    ///
+    /// This method will remove all environment variables starting with `CARGO_`
+    /// from the child process, including those that would normally be inherited
+    /// from the parent process. Other environment variables will remain unaffected.
+    /// Environment variables can be added back individually using [`env`].
+    ///
+    /// This is particularly useful when using cargo-hyperlight from a build script
+    /// or other cargo-invoked context where `CARGO_` variables may change the behavior
+    /// of the cargo command being executed.
+    ///
+    /// # Examples
+    ///
+    /// Basic usage:
+    ///
+    /// ```no_run
+    /// use cargo_hyperlight::cargo;
+    ///
+    /// cargo()
+    ///     .unwrap()
+    ///     .env_clear_cargo_vars()
+    ///     .env("CARGO_TARGET_DIR", "/path/to/target")
+    ///     .arg("build")
+    ///     .exec();
+    /// ```
+    ///
+    /// [`env`]: Command::env
+    pub fn env_clear_cargo_vars(&mut self) -> &mut Self {
+        self.inherit_cargo_envs = false;
+        self.envs.retain(|k, _| !k.starts_with("CARGO_"));
         self
     }
 
@@ -476,6 +512,11 @@ impl Command {
         }
         if !self.inherit_envs {
             command.env_clear();
+        }
+        if !self.inherit_cargo_envs {
+            for (k, _) in std::env::vars_os().filter(|(k, _)| k.starts_with("CARGO_")) {
+                command.env_remove(k);
+            }
         }
         if let Some(rustup_toolchain) = &self.cargo.rustup_toolchain {
             command.env("RUSTUP_TOOLCHAIN", rustup_toolchain);
