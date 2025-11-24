@@ -75,15 +75,13 @@ impl Debug for Command {
             write!(f, "-i ")?;
         }
         for (k, v) in cmd.get_envs() {
-            match v {
-                Some(_) => (), // will be done next
-                None => write!(f, "-u {} ", k.to_string_lossy())?,
+            if v.is_none() {
+                write!(f, "-u {} ", k.to_string_lossy())?;
             }
         }
         for (k, v) in cmd.get_envs() {
-            match v {
-                Some(v) => write!(f, "{}={:?} ", k.to_string_lossy(), v)?,
-                None => (), // already done above
+            if let Some(v) = v {
+                write!(f, "{}={:?} ", k.to_string_lossy(), v)?;
             }
         }
         write!(f, "{:?} ", self.get_program())?;
