@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
-use std::env::VarsOs;
 use std::ffi::{OsStr, OsString, c_char};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -77,8 +76,14 @@ impl Debug for Command {
         }
         for (k, v) in cmd.get_envs() {
             match v {
-                Some(v) => write!(f, "{}={:?} ", k.to_string_lossy(), v)?,
+                Some(_) => (), // will be done next
                 None => write!(f, "-u {} ", k.to_string_lossy())?,
+            }
+        }
+        for (k, v) in cmd.get_envs() {
+            match v {
+                Some(v) => write!(f, "{}={:?} ", k.to_string_lossy(), v)?,
+                None => (), // already done above
             }
         }
         write!(f, "{:?} ", self.get_program())?;
@@ -288,12 +293,14 @@ impl Command {
         self
     }
 
-    /// Clears all `CARGO_` environment variables that will be set for the child process.
+    /// Clears all `CARGO_` environment variables that will be set for the child process,
+    /// except for `CARGO_HOME`.
     ///
     /// This method will remove all environment variables starting with `CARGO_`
     /// from the child process, including those that would normally be inherited
-    /// from the parent process. Other environment variables will remain unaffected.
-    /// Environment variables can be added back individually using [`env`].
+    /// from the parent process, except for `CARGO_HOME`. Other environment variables
+    /// will remain unaffected. Environment variables can be added back individually
+    /// using [`env`].
     ///
     /// This is particularly useful when using cargo-hyperlight from a build script
     /// or other cargo-invoked context where `CARGO_` variables may change the behavior
@@ -317,7 +324,7 @@ impl Command {
     /// [`env`]: Command::env
     pub fn env_clear_cargo_vars(&mut self) -> &mut Self {
         self.inherit_cargo_envs = false;
-        self.envs.retain(|k, _| !k.starts_with("CARGO_"));
+        self.envs.retain(|k, _| !is_cargo_env(k));
         self
     }
 
@@ -491,13 +498,16 @@ impl Command {
     /// from the current process, taking into account whether [`env_clear`] has been called.
     ///
     /// [`env_clear`]: Command::env_clear
-    fn base_env(&self) -> VarsOs {
-        let mut env = env::vars_os();
-        if !self.inherit_envs {
-            // iterate over the whole VarOs to consume it
-            env.find(|_| false);
-        }
-        env
+    fn base_env(&self) -> impl Iterator<Item = (OsString, OsString)> {
+        env::vars_os().filter(|(k, _)| {
+            if !self.inherit_envs {
+                false
+            } else if !self.inherit_cargo_envs {
+                !is_cargo_env(k)
+            } else {
+                true
+            }
+        })
     }
 
     fn resolve_env(&self) -> HashMap<OsString, OsString> {
@@ -514,8 +524,10 @@ impl Command {
             command.env_clear();
         }
         if !self.inherit_cargo_envs {
-            for (k, _) in std::env::vars_os().filter(|(k, _)| k.starts_with("CARGO_")) {
-                command.env_remove(k);
+            for (k, _) in env::vars_os() {
+                if is_cargo_env(&k) {
+                    command.env_remove(k);
+                }
             }
         }
         if let Some(rustup_toolchain) = &self.cargo.rustup_toolchain {
@@ -733,4 +745,8 @@ fn exec(
     unsafe { libc::execvpe(arg_ptrs[0], arg_ptrs.as_ptr(), env_ptrs.as_ptr()) };
 
     Err(std::io::Error::last_os_error())
+}
+
+fn is_cargo_env(key: &OsStr) -> bool {
+    key != "CARGO_HOME" && key.starts_with("CARGO_")
 }
