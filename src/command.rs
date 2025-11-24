@@ -315,17 +315,23 @@ impl Command {
     ///
     /// cargo()
     ///     .unwrap()
-    ///     .env_clear_cargo_vars()
+    ///     .env_clear_cargo()
     ///     .env("CARGO_TARGET_DIR", "/path/to/target")
     ///     .arg("build")
     ///     .exec();
     /// ```
     ///
     /// [`env`]: Command::env
-    pub fn env_clear_cargo_vars(&mut self) -> &mut Self {
+    pub fn env_clear_cargo(&mut self) -> &mut Self {
         self.inherit_cargo_envs = false;
         self.envs.retain(|k, _| !is_cargo_env(k));
         self
+    }
+
+    #[doc(hidden)]
+    #[deprecated(note = "use `env_clear_cargo` instead")]
+    pub fn env_clear_cargo_vars(&mut self) -> &mut Self {
+        self.env_clear_cargo()
     }
 
     /// Removes an explicitly set environment variable and prevents inheriting
