@@ -16,7 +16,11 @@ pub trait CargoCmd {
     fn entrypoint(&mut self, entry: impl AsRef<str>) -> &mut Self;
     fn append_rustflags(&mut self, flags: impl AsRef<OsStr>) -> &mut Self;
     fn append_cflags(&mut self, triplet: impl AsRef<str>, flags: impl AsRef<OsStr>) -> &mut Self;
-    fn append_bindgen_cflags(&mut self, flags: impl AsRef<OsStr>) -> &mut Self;
+    fn append_bindgen_cflags(
+        &mut self,
+        triplet: impl AsRef<str>,
+        flags: impl AsRef<OsStr>,
+    ) -> &mut Self;
     fn allow_unstable(&mut self) -> &mut Self;
     fn resolve_env(
         &self,
@@ -148,37 +152,25 @@ impl CargoCmd for Command {
         }
 
         let triplet = triplet.as_ref();
-        let triplet_snake_case = triplet.replace('-', "_");
-        let triplet_snake_case_upper = triplet_snake_case.to_uppercase();
 
-        let search_keys = [
-            format!("CFLAGS_{triplet}"),
-            format!("CFLAGS_{triplet_snake_case}"),
-            format!("CFLAGS_{triplet_snake_case_upper}"),
-            "CFLAGS_hyperlight".to_string(),
-            "CFLAGS_HYPERLIGHT".to_string(),
-            "HYPERLIGHT_CFLAGS".to_string(),
-            "TARGET_CFLAGS".to_string(),
-            "CFLAGS".to_string(),
-        ];
-
-        let mut new_flags = search_keys
-            .iter()
-            .find_map(|key| get_env(self, key))
-            .unwrap_or_default();
+        let mut new_flags = find_cflags(self, triplet);
 
         if !new_flags.is_empty() {
             new_flags.push(" ");
         }
         new_flags.push(flags.as_ref());
-        self.env(&search_keys[0], new_flags);
+        self.env(format!("CFLAGS_{triplet}"), new_flags);
 
-        self.append_bindgen_cflags(flags);
+        self.append_bindgen_cflags(triplet, flags);
 
         self
     }
 
-    fn append_bindgen_cflags(&mut self, flags: impl AsRef<OsStr>) -> &mut Self {
+    fn append_bindgen_cflags(
+        &mut self,
+        triplet: impl AsRef<str>,
+        flags: impl AsRef<OsStr>,
+    ) -> &mut Self {
         if flags.as_ref().is_empty() {
             return self;
         }
@@ -189,7 +181,8 @@ impl CargoCmd for Command {
 
         // TODO(jprendes): account and use the target specific variants of BINDGEN_EXTRA_CLANG_ARGS
         // see https://github.com/rust-lang/rust-bindgen/tree/main?tab=readme-ov-file#environment-variables
-        let mut new_flags = get_env(self, "BINDGEN_EXTRA_CLANG_ARGS").unwrap_or_default();
+        let mut new_flags =
+            get_env(self, "BINDGEN_EXTRA_CLANG_ARGS").unwrap_or_else(|| find_cflags(self, triplet));
         if !new_flags.is_empty() {
             new_flags.push(" ");
         }
@@ -244,6 +237,28 @@ fn get_env(cmd: &Command, key: &str) -> Option<OsString> {
         Some((_, v)) => v.map(ToOwned::to_owned),
         None => std::env::var_os(key),
     }
+}
+
+fn find_cflags(cmd: &Command, triplet: impl AsRef<str>) -> OsString {
+    let triplet = triplet.as_ref();
+    let triplet_snake_case = triplet.replace('-', "_");
+    let triplet_snake_case_upper = triplet_snake_case.to_uppercase();
+
+    let search_keys = [
+        format!("CFLAGS_{triplet}"),
+        format!("CFLAGS_{triplet_snake_case}"),
+        format!("CFLAGS_{triplet_snake_case_upper}"),
+        "CFLAGS_hyperlight".to_string(),
+        "CFLAGS_HYPERLIGHT".to_string(),
+        "HYPERLIGHT_CFLAGS".to_string(),
+        "TARGET_CFLAGS".to_string(),
+        "CFLAGS".to_string(),
+    ];
+
+    search_keys
+        .iter()
+        .find_map(|key| get_env(cmd, key))
+        .unwrap_or_default()
 }
 
 pub fn merge_env(
