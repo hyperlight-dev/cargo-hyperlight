@@ -1,6 +1,8 @@
 # yaml-language-server: $schema=https://json.schemastore.org/github-action.json
 
 name: CI
+permissions:
+  contents: read
 
 on:
   push:
