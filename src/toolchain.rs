@@ -86,6 +86,8 @@ pub fn cflags(args: &Args) -> OsString {
         // https://github.com/hyperlight-dev/hyperlight/blob/main/src/hyperlight_guest_bin/build.rs#L80
         "--target=x86_64-unknown-linux-none",
         "-U__linux__",
+        // Our rust target also has this set since it based off "x86_64-unknown-none"
+        "-fPIC",
         // We don't support stack protectors at the moment, but Arch Linux clang
         // auto-enables them for -linux platforms, so explicitly disable them.
         "-fno-stack-protector",
