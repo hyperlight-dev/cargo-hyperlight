@@ -14,7 +14,7 @@ jobs:
     name: Validate version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Check version matches tag
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -32,7 +32,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
       - name: Publish
@@ -47,7 +47,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
