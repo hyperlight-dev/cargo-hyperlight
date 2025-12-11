@@ -86,3 +86,13 @@ cargo hyperlight build --release
 Your binary will be built for the `x86_64-hyperlight-none` target by default, and placed in `target/x86_64-hyperlight-none/release/guest`.
 
 There's no need for any extra configuration, the command will take care of everything.
+
+## Releasing
+
+To publish a new version:
+
+1. Update the version in `Cargo.toml`
+2. Commit the change: `git commit -S -s -am  "Bump version to X.Y.Z"` and open a PR
+3. Create and push a tag: `git tag -s vX.Y.Z && git push origin vX.Y.Z`
+
+The CI will automatically run tests, publish to crates.io, and create a GitHub release.
