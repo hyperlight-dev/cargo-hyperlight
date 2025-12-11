@@ -18,7 +18,7 @@ jobs:
       - name: Check version matches tag
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          CARGO_VERSION=$(grep -m1 '^version =' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          CARGO_VERSION=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == "cargo-hyperlight") | .version')
           if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
             echo "Error: Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
             exit 1
