@@ -69,10 +69,6 @@ impl Args {
     pub fn crate_dir(&self) -> std::path::PathBuf {
         self.sysroot_dir().join("crate")
     }
-
-    pub fn build_plan_dir(&self) -> std::path::PathBuf {
-        self.sysroot_dir().join("build-plan")
-    }
 }
 
 trait CargoCommandExt {

@@ -10,14 +10,18 @@ use crate::cli::Args;
 const CARGO_TOML: &str = include_str!("dummy/_Cargo.toml");
 const LIB_RS: &str = include_str!("dummy/_lib.rs");
 
-#[derive(serde::Deserialize)]
-struct Invocation {
-    outputs: Vec<PathBuf>,
+#[derive(serde::Deserialize, Default)]
+struct CargoBuildMessageTarget {
+    name: String,
 }
 
 #[derive(serde::Deserialize)]
-struct BuildPlan {
-    invocations: Vec<Invocation>,
+struct CargoBuildMessage {
+    reason: String,
+    #[serde(default)]
+    target: CargoBuildMessageTarget,
+    #[serde(default)]
+    filenames: Vec<PathBuf>,
 }
 
 pub fn build(args: &Args) -> Result<()> {
@@ -53,7 +57,6 @@ Supported values are:
     let triplet_dir = args.triplet_dir();
     let crate_dir = args.crate_dir();
     let lib_dir = args.libs_dir();
-    let build_plan_dir = args.build_plan_dir();
 
     std::fs::create_dir_all(&triplet_dir).context("Failed to create sysroot directories")?;
     std::fs::write(
@@ -97,80 +100,44 @@ Supported values are:
             .context("Failed to get Rust's std lib sources")?;
     }
 
-    // Use cargo build's build plan to get the list of artifacts
-    let build_plan = cargo_cmd()?
+    // Build the sysroot
+    let output = cargo_cmd()?
         .env_clear()
         .envs(args.env.iter())
         .current_dir(&args.current_dir)
         .arg("build")
-        .arg("--quiet")
         .target(&args.target)
         .manifest_path(&Some(crate_dir.join("Cargo.toml")))
-        .target_dir(&build_plan_dir)
+        .target_dir(&target_dir)
         .arg("-Zbuild-std=core,alloc")
         .arg("-Zbuild-std-features=compiler_builtins/mem")
         .arg("--release")
-        .arg("-Zunstable-options")
-        .arg("--build-plan")
-        // build-plan is an unstable feature
+        .arg("--message-format=json")
+        // The core, alloc and compiler_builtins crates use unstable features
         .allow_unstable()
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .sysroot(&sysroot_dir)
-        .checked_output()
-        .context("Failed to build sysroot")?;
+        .output()
+        .context("Failed to build sysroot cargo project")?;
 
-    let build_plan = String::from_utf8_lossy(&build_plan.stdout);
-    let mut artifacts = vec![];
-    for line in build_plan.lines() {
-        let Ok(step) = serde_json::from_str::<BuildPlan>(line) else {
-            continue;
-        };
-        artifacts.extend(
-            step.invocations
-                .into_iter()
-                .flat_map(|i| i.outputs)
-                .filter_map(|f| {
-                    let Ok(f) = f.strip_prefix(&build_plan_dir) else {
-                        return None;
-                    };
-                    let filename = f.file_name()?.to_str()?;
-                    let (stem, ext) = filename.rsplit_once('.')?;
-                    let (stem, _) = stem.split_once('-')?;
-                    // skip libsysroot as they are for our empty dummy crate
-                    if stem != "libsysroot" && (ext == "rlib" || ext == "rmeta") {
-                        Some(target_dir.join(f))
-                    } else {
-                        None
-                    }
-                }),
-        );
-    }
+    ensure!(
+        output.status.success(),
+        "Failed to build sysroot\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
-    // check if any artifacts is missing
-    let should_build = artifacts.iter().any(|f| !f.exists());
+    let messages = String::from_utf8_lossy(&output.stdout);
+    let mut artifacts = Vec::new();
 
-    if should_build {
-        // Build the sysroot
-        let success = cargo_cmd()?
-            .env_clear()
-            .envs(args.env.iter())
-            .current_dir(&args.current_dir)
-            .arg("build")
-            .target(&args.target)
-            .manifest_path(&Some(crate_dir.join("Cargo.toml")))
-            .target_dir(&target_dir)
-            .arg("-Zbuild-std=core,alloc")
-            .arg("-Zbuild-std-features=compiler_builtins/mem")
-            .arg("--release")
-            // The core, alloc and compiler_builtins crates use unstable features
-            .allow_unstable()
-            .env_remove("RUSTC_WORKSPACE_WRAPPER")
-            .sysroot(&sysroot_dir)
-            .status()
-            .context("Failed to create sysroot cargo project")?
-            .success();
-
-        ensure!(success, "Failed to build sysroot");
+    for message in messages.lines() {
+        let message = serde_json::from_str::<CargoBuildMessage>(message)
+            .context("Failed to parse sysroot build message")?;
+        if message.reason == "compiler-artifact" {
+            let name = message.target.name;
+            if name == "core" || name == "alloc" || name == "compiler_builtins" {
+                artifacts.extend(message.filenames);
+            }
+        }
     }
 
     std::fs::create_dir_all(&lib_dir).context("Failed to create sysroot lib directory")?;
