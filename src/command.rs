@@ -291,14 +291,23 @@ impl Command {
         self
     }
 
-    /// Clears all `CARGO_` environment variables that will be set for the child process,
-    /// except for `CARGO_HOME`.
+    /// Clears Cargo build-context environment variables from the child process.
     ///
-    /// This method will remove all environment variables starting with `CARGO_`
-    /// from the child process, including those that would normally be inherited
-    /// from the parent process, except for `CARGO_HOME`. Other environment variables
-    /// will remain unaffected. Environment variables can be added back individually
-    /// using [`env`].
+    /// This method removes the `CARGO_` environment variables that Cargo sets
+    /// during build script execution and crate compilation (e.g. `CARGO_PKG_*`,
+    /// `CARGO_MANIFEST_*`, `CARGO_CFG_*`, `CARGO_FEATURE_*`, etc.).
+    ///
+    /// User configuration variables are preserved, including:
+    /// - `CARGO_HOME` — Cargo home directory
+    /// - `CARGO_REGISTRIES_*` — Private registry index URLs, tokens, and credential providers
+    /// - `CARGO_REGISTRY_*` — Default registry and crates.io credentials
+    /// - `CARGO_HTTP_*` — HTTP/TLS proxy and timeout settings
+    /// - `CARGO_NET_*` — Network configuration (retry, offline, git-fetch-with-cli)
+    /// - `CARGO_ALIAS_*` — Command aliases
+    /// - `CARGO_TERM_*` — Terminal output settings
+    ///
+    /// Other environment variables will remain unaffected. Environment variables
+    /// can be added back individually using [`env`].
     ///
     /// This is particularly useful when using cargo-hyperlight from a build script
     /// or other cargo-invoked context where `CARGO_` variables may change the behavior
@@ -322,7 +331,7 @@ impl Command {
     /// [`env`]: Command::env
     pub fn env_clear_cargo(&mut self) -> &mut Self {
         self.inherit_cargo_envs = false;
-        self.envs.retain(|k, _| !is_cargo_env(k));
+        self.envs.retain(|k, _| should_preserve_cargo_env(k));
         self
     }
 
@@ -507,7 +516,7 @@ impl Command {
             if !self.inherit_envs {
                 false
             } else if !self.inherit_cargo_envs {
-                !is_cargo_env(k)
+                should_preserve_cargo_env(k)
             } else {
                 true
             }
@@ -529,7 +538,7 @@ impl Command {
         }
         if !self.inherit_cargo_envs {
             for (k, _) in env::vars_os() {
-                if is_cargo_env(&k) {
+                if !should_preserve_cargo_env(&k) {
                     command.env_remove(k);
                 }
             }
@@ -751,6 +760,31 @@ fn exec(
     Err(std::io::Error::last_os_error())
 }
 
-fn is_cargo_env(key: &OsStr) -> bool {
-    key != "CARGO_HOME" && key.starts_with("CARGO_")
+/// Returns `true` if the given environment variable should be preserved
+/// when clearing Cargo build-context variables.
+///
+/// Non-`CARGO_` variables are always preserved. The following `CARGO_`
+/// user configuration variables are also preserved:
+/// - `CARGO_HOME` — Cargo home directory
+/// - `CARGO_REGISTRIES_*` — Private registry index URLs, tokens, and credential providers
+/// - `CARGO_REGISTRY_*` — Default registry and crates.io credentials
+/// - `CARGO_HTTP_*` — HTTP/TLS proxy and timeout settings
+/// - `CARGO_NET_*` — Network configuration (retry, offline, git-fetch-with-cli)
+/// - `CARGO_ALIAS_*` — Command aliases
+/// - `CARGO_TERM_*` — Terminal output settings
+///
+/// All other `CARGO_*` variables (e.g. `CARGO_PKG_*`, `CARGO_MANIFEST_*`,
+/// `CARGO_CFG_*`, `CARGO_FEATURE_*`, `CARGO_MAKEFLAGS`, etc.) are considered
+/// build-context variables set by Cargo during compilation and will be cleared.
+///
+/// See: <https://doc.rust-lang.org/cargo/reference/environment-variables.html>
+fn should_preserve_cargo_env(key: &OsStr) -> bool {
+    !key.starts_with("CARGO_")
+        || key == "CARGO_HOME"
+        || key.starts_with("CARGO_REGISTRIES_")
+        || key.starts_with("CARGO_REGISTRY_")
+        || key.starts_with("CARGO_HTTP_")
+        || key.starts_with("CARGO_NET_")
+        || key.starts_with("CARGO_ALIAS_")
+        || key.starts_with("CARGO_TERM_")
 }
