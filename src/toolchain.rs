@@ -53,15 +53,26 @@ pub fn prepare(args: &Args) -> Result<()> {
     std::fs::create_dir_all(&include_dst_dir)
         .context("Failed to create sysroot include directory")?;
 
-    const INCLUDE_DIRS: &[&str] = &[
-        "third_party/printf/",
-        "third_party/musl/include",
-        "third_party/musl/arch/generic",
-        "third_party/musl/arch/x86_64",
-        "third_party/musl/src/internal",
-    ];
+    // Detect which libc variant is present: picolibc or legacy musl
+    let include_dirs: &[&str] = if hyperlight_guest_bin_dir
+        .join("third_party/musl/include")
+        .is_dir()
+    {
+        &[
+            "third_party/printf/",
+            "third_party/musl/include",
+            "third_party/musl/arch/generic",
+            "third_party/musl/arch/x86_64",
+            "third_party/musl/src/internal",
+        ]
+    } else {
+        &[
+            "third_party/picolibc/libc/include",
+            "third_party/picolibc/libc/stdio",
+        ]
+    };
 
-    for dir in INCLUDE_DIRS {
+    for dir in include_dirs {
         let include_src_dir = hyperlight_guest_bin_dir.join(dir);
         let files = glob::glob(&format!("{}/**/*.h", include_src_dir.display()))
             .context("Failed to read include source directory")?;
@@ -94,7 +105,7 @@ pub fn cflags(args: &Args) -> OsString {
         "-fstack-clash-protection",
         "-mstack-probe-size=4096",
         "-mno-red-zone",
-        "-nostdinc",
+        "-nostdlibinc",
         // Define HYPERLIGHT as we use this to conditionally enable/disable code
         // in the libc headers
         "-DHYPERLIGHT=1",
