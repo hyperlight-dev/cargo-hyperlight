@@ -529,7 +529,25 @@ impl Command {
 
     fn command(&self) -> StdCommand {
         let mut command = self.cargo.command();
-        command.args(self.get_args());
+        // Filter out --target and --target-dir from forwarded args since
+        // populate_from_args sets them via env vars with the resolved values
+        let args: Vec<_> = self.get_args().map(|a| a.to_owned()).collect();
+        let mut skip_next = false;
+        for (i, arg) in args.iter().enumerate() {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            let arg_str = arg.to_string_lossy();
+            if arg_str == "--target" || arg_str == "--target-dir" {
+                skip_next = true; // skip the next arg (the value)
+                continue;
+            }
+            if arg_str.starts_with("--target=") || arg_str.starts_with("--target-dir=") {
+                continue;
+            }
+            command.arg(arg);
+        }
         if let Some(cwd) = &self.current_dir {
             command.current_dir(cwd);
         }
