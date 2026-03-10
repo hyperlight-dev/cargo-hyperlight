@@ -83,7 +83,7 @@ Then to build the hyperlight guest binary, run
 cargo hyperlight build --release
 ```
 
-Your binary will be built for the `x86_64-hyperlight-none` target by default, and placed in `target/x86_64-hyperlight-none/release/guest`.
+Your binary will be built for the `x86_64-hyperlight-none` target (or `aarch64-hyperlight-none` on ARM) by default, and placed in `target/<arch>-hyperlight-none/release/guest`.
 
 There's no need for any extra configuration, the command will take care of everything.
 
