@@ -22,4 +22,4 @@ build-guest:
     cargo hyperlight build --manifest-path ./examples/guest/Cargo.toml
 
 run-guest: build-guest
-    cargo run --manifest-path ./examples/host/Cargo.toml -- ./target/x86_64-hyperlight-none/debug/guest
+    cargo run --manifest-path ./examples/host/Cargo.toml -- ./target/{{arch()}}-hyperlight-none/debug/guest
