@@ -45,10 +45,27 @@ pub fn build(args: &Args) -> Result<()> {
             spec.remove("rustc-abi");
             spec
         }
+        "aarch64-hyperlight-none" => {
+            let mut spec = get_spec(args, "aarch64-unknown-none")?;
+            let Value::Object(custom) = json!({
+                "code-model": "small",
+                "linker": "rust-lld",
+                "linker-flavor": "gnu-lld",
+                "pre-link-args": {
+                    "gnu-lld": ["-znostart-stop-gc"],
+                },
+            }) else {
+                unreachable!()
+            };
+            spec.extend(custom);
+            spec.remove("rustc-abi");
+            spec
+        }
         triplet => bail!(
             "Unsupported target triple: {triplet:?}
 Supported values are:
- * x86_64-hyperlight-none"
+ * x86_64-hyperlight-none
+ * aarch64-hyperlight-none"
         ),
     };
 
@@ -180,7 +197,8 @@ fn get_spec(args: &Args, triplet: impl AsRef<str>) -> Result<Map<String, Value>>
         .envs(args.env.iter())
         .current_dir(&args.current_dir)
         .arg("rustc")
-        .target(triplet)
+        .arg("--target")
+        .arg(triplet.as_ref())
         .manifest_path(&args.manifest_path)
         .arg("-Zunstable-options")
         .arg("--print=target-spec-json")
