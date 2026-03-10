@@ -48,8 +48,8 @@ impl CargoBinary {
 
 pub fn find_cargo() -> Result<CargoBinary> {
     let cargo = match env::var_os("CARGO") {
-        Some(cargo) => Path::new(&cargo).canonicalize()?,
-        None => which::which("cargo")?.canonicalize()?,
+        Some(cargo) => PathBuf::from(cargo),
+        None => which::which("cargo")?,
     };
     let rustup_toolchain = env::var_os("RUSTUP_TOOLCHAIN");
     Ok(CargoBinary {
