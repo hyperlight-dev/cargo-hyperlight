@@ -74,33 +74,34 @@ pub fn prepare(args: &Args) -> Result<()> {
     std::fs::create_dir_all(&include_dst_dir)
         .context("Failed to create sysroot include directory")?;
 
-    // Detect which libc variant is present: picolibc or legacy musl
-    let include_dirs: &[&str] = &[
-        // directories for musl
-        "third_party/printf/",
-        "third_party/musl/include",
-        "third_party/musl/arch/generic",
-        "third_party/musl/arch/x86_64",
-        "third_party/musl/src/internal",
-        // directories for picolibc
-        "third_party/picolibc/libc/include",
-        "third_party/picolibc/libc/stdio",
-        "include",
-    ];
+    if !args.target.starts_with("aarch64") {
+        // Detect which libc variant is present: picolibc or legacy musl
+        let include_dirs: &[&str] = &[
+            // directories for musl
+            "third_party/printf/",
+            "third_party/musl/include",
+            "third_party/musl/arch/generic",
+            "third_party/musl/arch/x86_64",
+            "third_party/musl/src/internal",
+            // directories for picolibc
+            "third_party/picolibc/libc/include",
+            "third_party/picolibc/libc/stdio",
+            "include",
+        ];
 
-    for dir in include_dirs {
-        let include_src_dir = libc_dir.join(dir);
-        let files = glob::glob(&format!("{}/**/*.h", include_src_dir.display()))
-            .context("Failed to read include source directory")?;
+        for dir in include_dirs {
+            let include_src_dir = libc_dir.join(dir);
+            let files = glob::glob(&format!("{}/**/*.h", include_src_dir.display()))
+                .context("Failed to read include source directory")?;
+            for file in files {
+                let src = file.context("Failed to read include source file")?;
+                let dst = src.strip_prefix(&include_src_dir).unwrap();
+                let dst = include_dst_dir.join(dst);
 
-        for file in files {
-            let src = file.context("Failed to read include source file")?;
-            let dst = src.strip_prefix(&include_src_dir).unwrap();
-            let dst = include_dst_dir.join(dst);
-
-            std::fs::create_dir_all(dst.parent().unwrap())
-                .context("Failed to create include subdirectory")?;
-            std::fs::copy(&src, &dst).context("Failed to copy include file")?;
+                std::fs::create_dir_all(dst.parent().unwrap())
+                    .context("Failed to create include subdirectory")?;
+                std::fs::copy(&src, &dst).context("Failed to copy include file")?;
+            }
         }
     }
 
@@ -108,19 +109,21 @@ pub fn prepare(args: &Args) -> Result<()> {
 }
 
 pub fn cflags(args: &Args) -> OsString {
-    const FLAGS: &[&str] = &[
-        // terrible hack, see
-        // https://github.com/hyperlight-dev/hyperlight/blob/main/src/hyperlight_guest_bin/build.rs#L80
-        "--target=x86_64-unknown-linux-none",
+    let clang_target = if args.target.starts_with("aarch64") {
+        "--target=aarch64-unknown-linux-none"
+    } else {
+        "--target=x86_64-unknown-linux-none"
+    };
+
+    let common_flags: &[&str] = &[
+        clang_target,
         "-U__linux__",
-        // Our rust target also has this set since it based off "x86_64-unknown-none"
         "-fPIC",
         // We don't support stack protectors at the moment, but Arch Linux clang
         // auto-enables them for -linux platforms, so explicitly disable them.
         "-fno-stack-protector",
         "-fstack-clash-protection",
         "-mstack-probe-size=4096",
-        "-mno-red-zone",
         "-nostdlibinc",
         // Define HYPERLIGHT as we use this to conditionally enable/disable code
         // in the libc headers
@@ -129,9 +132,14 @@ pub fn cflags(args: &Args) -> OsString {
     ];
 
     let mut flags = OsString::new();
-    for flag in FLAGS {
+    for flag in common_flags {
         flags.push(flag);
         flags.push(" ");
+    }
+
+    // x86_64-specific flags
+    if args.target.starts_with("x86_64") {
+        flags.push("-mno-red-zone ");
     }
     flags.push(" ");
     flags.push("-isystem");
