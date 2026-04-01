@@ -41,6 +41,9 @@ jobs:
     - name: Run example
       shell: bash
       run: just run-guest
+    - name: Test scaffold
+      shell: bash
+      run: just test-scaffold
 
   spelling:
     name: Spell check with typos
