@@ -36,7 +36,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<()> {
         .to_str()
         .context("Project name must be valid UTF-8")?;
 
-    ensure!(!name.is_empty(), "Project name must not be empty");
+    validate_name(name)?;
     ensure!(
         !cli.path.exists(),
         "Directory '{}' already exists",
@@ -94,5 +94,39 @@ fn write_file(path: impl AsRef<Path>, content: &str) -> Result<()> {
             .with_context(|| format!("Failed to create directory '{}'", parent.display()))?;
     }
     fs::write(path, content).with_context(|| format!("Failed to write '{}'", path.display()))?;
+    Ok(())
+}
+
+/// Validate that the name is usable as a Cargo package name.
+/// Mirrors the essential checks from `cargo new`.
+fn validate_name(name: &str) -> Result<()> {
+    ensure!(!name.is_empty(), "project name must not be empty");
+    ensure!(
+        name.chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_'),
+        "invalid project name `{name}`: must contain only letters, numbers, `-`, or `_`"
+    );
+    ensure!(
+        name.chars()
+            .next()
+            .is_some_and(|c| c.is_alphabetic() || c == '_'),
+        "invalid project name `{name}`: must start with a letter or `_`"
+    );
+    let reserved = [
+        "test",
+        "core",
+        "std",
+        "alloc",
+        "proc_macro",
+        "proc-macro",
+        "self",
+        "Self",
+        "crate",
+        "super",
+    ];
+    ensure!(
+        !reserved.contains(&name),
+        "invalid project name `{name}`: it conflicts with a Rust built-in name"
+    );
     Ok(())
 }
