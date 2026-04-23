@@ -69,6 +69,7 @@ pub fn prepare(args: &Args) -> Result<()> {
         &[
             "third_party/picolibc/libc/include",
             "third_party/picolibc/libc/stdio",
+            "include",
         ]
     };
 
