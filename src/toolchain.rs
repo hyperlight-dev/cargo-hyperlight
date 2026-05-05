@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use regex::Regex;
 
 use crate::cargo_cmd::{CargoCmd, cargo_cmd};
@@ -21,7 +21,7 @@ struct CargoMetadataPackage {
     version: semver::Version,
 }
 
-pub fn prepare(args: &Args) -> Result<()> {
+pub fn find_libc_dir(args: &Args) -> Result<PathBuf> {
     let metadata = cargo_cmd()?
         .env_clear()
         .envs(args.env.iter())
@@ -37,16 +37,37 @@ pub fn prepare(args: &Args) -> Result<()> {
     let metadata = serde_json::from_slice::<CargoMetadata>(&metadata.stdout)
         .context("Failed to parse cargo metadata")?;
 
+    let hyperlight_libc = metadata
+        .packages
+        .iter()
+        .find(|pkg| pkg.name == "hyperlight-libc");
+
+    if let Some(hyperlight_libc) = hyperlight_libc {
+        let hyperlight_libc_dir = hyperlight_libc
+            .manifest_path
+            .parent()
+            .context("Failed to get directory for hyperlight-libc")?;
+        return Ok(hyperlight_libc_dir.to_path_buf());
+    }
+
     let hyperlight_guest_bin = metadata
         .packages
-        .into_iter()
-        .find(|pkg| pkg.name == "hyperlight-guest-bin")
-        .context("Could not find hyperlight-guest-bin package in cargo metadata")?;
+        .iter()
+        .find(|pkg| pkg.name == "hyperlight-guest-bin");
 
-    let hyperlight_guest_bin_dir = hyperlight_guest_bin
-        .manifest_path
-        .parent()
-        .context("Failed to get directory for hyperlight-guest-bin")?;
+    if let Some(hyperlight_guest_bin) = hyperlight_guest_bin {
+        let hyperlight_guest_bin_dir = hyperlight_guest_bin
+            .manifest_path
+            .parent()
+            .context("Failed to get directory for hyperlight-guest-bin")?;
+        return Ok(hyperlight_guest_bin_dir.to_path_buf());
+    }
+
+    bail!("Could not find hyperlight-libc or hyperlight-guest-bin package in cargo metadata");
+}
+
+pub fn prepare(args: &Args) -> Result<()> {
+    let libc_dir = find_libc_dir(args)?;
 
     let include_dst_dir = args.includes_dir();
 
@@ -54,27 +75,21 @@ pub fn prepare(args: &Args) -> Result<()> {
         .context("Failed to create sysroot include directory")?;
 
     // Detect which libc variant is present: picolibc or legacy musl
-    let include_dirs: &[&str] = if hyperlight_guest_bin_dir
-        .join("third_party/musl/include")
-        .is_dir()
-    {
-        &[
-            "third_party/printf/",
-            "third_party/musl/include",
-            "third_party/musl/arch/generic",
-            "third_party/musl/arch/x86_64",
-            "third_party/musl/src/internal",
-        ]
-    } else {
-        &[
-            "third_party/picolibc/libc/include",
-            "third_party/picolibc/libc/stdio",
-            "include",
-        ]
-    };
+    let include_dirs: &[&str] = &[
+        // directories for musl
+        "third_party/printf/",
+        "third_party/musl/include",
+        "third_party/musl/arch/generic",
+        "third_party/musl/arch/x86_64",
+        "third_party/musl/src/internal",
+        // directories for picolibc
+        "third_party/picolibc/libc/include",
+        "third_party/picolibc/libc/stdio",
+        "include",
+    ];
 
     for dir in include_dirs {
-        let include_src_dir = hyperlight_guest_bin_dir.join(dir);
+        let include_src_dir = libc_dir.join(dir);
         let files = glob::glob(&format!("{}/**/*.h", include_src_dir.display()))
             .context("Failed to read include source directory")?;
 
