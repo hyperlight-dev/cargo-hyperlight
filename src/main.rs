@@ -3,6 +3,7 @@ use std::env;
 use cargo_hyperlight::cargo;
 
 mod perf;
+mod scaffold;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const GIT_HASH: &str = env!("GIT_HASH");
@@ -22,6 +23,12 @@ fn main() {
         }
         Some(a) if a == "perf" => {
             if let Err(e) = perf::run(args) {
+                eprintln!("{e:?}");
+                std::process::exit(1);
+            }
+        }
+        Some(a) if a == "scaffold" => {
+            if let Err(e) = scaffold::run(args) {
                 eprintln!("{e:?}");
                 std::process::exit(1);
             }

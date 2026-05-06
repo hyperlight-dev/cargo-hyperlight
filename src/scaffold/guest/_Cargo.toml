@@ -1,0 +1,9 @@
+[package]
+name = "{name}"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hyperlight-guest = "{version}"
+hyperlight-guest-bin = "{version}"
+hyperlight-common = { version = "{version}", default-features = false }
