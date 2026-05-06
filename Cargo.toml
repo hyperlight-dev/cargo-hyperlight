@@ -16,7 +16,7 @@ const_format = "0.2"
 glob = "0.3"
 libc = "0.2"
 object = { version = "0.39", default-features = false, features = ["read", "elf"] }
-os_str_bytes = "7.1.1"
+os_str_bytes = "7.2.0"
 regex = "1.12"
 rustc-demangle = "0.1"
 semver = { version = "1.0", features = ["serde"] }
