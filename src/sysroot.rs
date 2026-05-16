@@ -54,6 +54,10 @@ pub fn build(args: &Args) -> Result<()> {
                 "pre-link-args": {
                     "gnu-lld": ["-znostart-stop-gc"],
                 },
+                "relocation-model": "pic",
+                "direct-access-external-data": true,
+                "position-independent-executables": true,
+                "features": "+v8.1a,+strict-align,+neon,+fp-armv8"
             }) else {
                 unreachable!()
             };
