@@ -2,6 +2,7 @@ use std::env;
 
 use cargo_hyperlight::cargo;
 
+mod new;
 mod perf;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -22,6 +23,12 @@ fn main() {
         }
         Some(a) if a == "perf" => {
             if let Err(e) = perf::run(args) {
+                eprintln!("{e:?}");
+                std::process::exit(1);
+            }
+        }
+        Some(a) if a == "new" => {
+            if let Err(e) = new::run(args) {
                 eprintln!("{e:?}");
                 std::process::exit(1);
             }
