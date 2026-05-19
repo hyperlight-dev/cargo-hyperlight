@@ -7,7 +7,7 @@ fn cargo_hyperlight() -> Command {
     cmd
 }
 
-/// Cargo command for scaffolded projects. Removes CARGO_TARGET_DIR so each
+/// Cargo command for generated projects. Removes CARGO_TARGET_DIR so each
 /// project uses its own target/, matching how users actually run the commands.
 fn cargo() -> Command {
     let mut cmd = Command::new(env!("CARGO"));

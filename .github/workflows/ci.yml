@@ -41,7 +41,7 @@ jobs:
     - name: Run example
       shell: bash
       run: just run-guest
-    - name: Test scaffold
+    - name: Test `new` subcommand
       shell: bash
       run: just test-new
 
