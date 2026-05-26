@@ -533,7 +533,7 @@ impl Command {
         // populate_from_args sets them via env vars with the resolved values
         let args: Vec<_> = self.get_args().map(|a| a.to_owned()).collect();
         let mut skip_next = false;
-        for (i, arg) in args.iter().enumerate() {
+        for arg in args.iter() {
             if skip_next {
                 skip_next = false;
                 continue;
