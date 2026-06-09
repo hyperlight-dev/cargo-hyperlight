@@ -15,6 +15,8 @@ jobs:
   validate:
     name: Validate version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
       - name: Check version matches tag
