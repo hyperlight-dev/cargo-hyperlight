@@ -22,10 +22,6 @@ pub trait CargoCmd {
         flags: impl AsRef<OsStr>,
     ) -> &mut Self;
     fn allow_unstable(&mut self) -> &mut Self;
-    fn resolve_env(
-        &self,
-        base: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)>,
-    ) -> HashMap<OsString, OsString>;
     fn checked_output(&mut self) -> Result<CheckedOutput>;
     fn checked_status(&mut self) -> Result<()>;
 }
@@ -193,13 +189,6 @@ impl CargoCmd for Command {
 
     fn allow_unstable(&mut self) -> &mut Self {
         self.env("RUSTC_BOOTSTRAP", "1")
-    }
-
-    fn resolve_env(
-        &self,
-        base: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)>,
-    ) -> HashMap<OsString, OsString> {
-        merge_env(base, self.get_envs())
     }
 
     fn checked_output(&mut self) -> Result<CheckedOutput> {

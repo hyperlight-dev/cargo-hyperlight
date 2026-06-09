@@ -1,10 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
-use std::convert::Infallible;
-use std::ffi::{OsStr, OsString, c_char};
+use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
-use std::{env, iter};
+use std::env;
 
 use anyhow::{Context, Result};
 use os_str_bytes::OsStrBytesExt;
@@ -655,127 +654,6 @@ impl Command {
             .context("Failed to execute cargo")?;
         Ok(())
     }
-
-    /// Executes the cargo command, replacing the current process.
-    ///
-    /// This function will never return on success, as it replaces the current process
-    /// with the cargo process. On error, it will print the error and exit with code 101.
-    ///
-    /// # Examples
-    ///
-    /// Basic usage:
-    ///
-    /// ```no_run
-    /// use cargo_hyperlight::cargo;
-    ///
-    /// cargo()
-    ///     .unwrap()
-    ///     .arg("build")
-    ///     .exec(); // This will never return
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// This function will exit the process with code 101 if:
-    /// - The sysroot preparation fails
-    /// - The process replacement fails
-    pub fn exec(&self) -> ! {
-        match self.exec_impl() {
-            Err(e) => {
-                eprintln!("{e:?}");
-                std::process::exit(101);
-            }
-        }
-    }
-
-    /// Internal implementation of process replacement.
-    ///
-    /// This method prepares the sysroot and then calls the low-level `exec` function
-    /// to replace the current process.
-    fn exec_impl(&self) -> anyhow::Result<Infallible> {
-        let args = self.build_args();
-
-        args.prepare_sysroot()
-            .context("Failed to prepare sysroot")?;
-
-        let mut command = self.command();
-        command.populate_from_args(&args);
-
-        if let Some(cwd) = self.get_current_dir() {
-            env::set_current_dir(cwd).context("Failed to change current directory")?;
-        }
-
-        Ok(exec(
-            command.get_program(),
-            command.get_args(),
-            command.resolve_env(self.base_env()),
-        )?)
-    }
-}
-
-/// Replaces the current process with the specified program using `execvpe`.
-///
-/// This function converts the provided arguments and environment variables into
-/// the format expected by the `execvpe` system call and then replaces the current
-/// process with the new program.
-///
-/// # Arguments
-///
-/// * `program` - The path to the program to execute
-/// * `args` - The command-line arguments to pass to the program
-/// * `envs` - The environment variables to set for the new process
-///
-/// # Returns
-///
-/// This function should never return on success. On failure, it returns an
-/// `std::io::Error` describing what went wrong.
-///
-/// # Safety
-///
-/// This function uses unsafe code to call `libc::execvpe`. The implementation
-/// carefully manages memory to ensure null-terminated strings are properly
-/// constructed for the system call.
-fn exec(
-    program: impl AsRef<OsStr>,
-    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
-    envs: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)>,
-) -> std::io::Result<Infallible> {
-    let mut env_bytes = vec![];
-    let mut env_offsets = vec![];
-    for (k, v) in envs.into_iter() {
-        env_offsets.push(env_bytes.len());
-        env_bytes.extend_from_slice(k.as_ref().as_encoded_bytes());
-        env_bytes.push(b'=');
-        env_bytes.extend_from_slice(v.as_ref().as_encoded_bytes());
-        env_bytes.push(0);
-    }
-    let env_ptrs = env_offsets
-        .into_iter()
-        .map(|offset| env_bytes[offset..].as_ptr() as *const c_char)
-        .chain(iter::once(std::ptr::null()))
-        .collect::<Vec<_>>();
-
-    let mut arg_bytes = vec![];
-    let mut arg_offsets = vec![];
-
-    arg_offsets.push(arg_bytes.len());
-    arg_bytes.extend_from_slice(program.as_ref().as_encoded_bytes());
-    arg_bytes.push(0);
-
-    for arg in args {
-        arg_offsets.push(arg_bytes.len());
-        arg_bytes.extend_from_slice(arg.as_ref().as_encoded_bytes());
-        arg_bytes.push(0);
-    }
-    let arg_ptrs = arg_offsets
-        .into_iter()
-        .map(|offset| arg_bytes[offset..].as_ptr() as *const c_char)
-        .chain(iter::once(std::ptr::null()))
-        .collect::<Vec<_>>();
-
-    unsafe { libc::execvpe(arg_ptrs[0], arg_ptrs.as_ptr(), env_ptrs.as_ptr()) };
-
-    Err(std::io::Error::last_os_error())
 }
 
 /// Returns `true` if the given environment variable should be preserved
