@@ -30,3 +30,17 @@ run-guest: build-guest
 
 test-new:
     cargo test --test new
+
+test-clang-parser:
+    cargo test --test clang_parser
+
+test: test-new test-clang-parser
+
+build-c-sysroot:
+    cargo hyperlight build-c-sysroot --manifest-path examples/c/fetch-capi/Cargo.toml --c-sysroot-dir examples/c/sysroot
+
+build-c-guest: build-c-sysroot
+    examples/c/sysroot/bin/clang examples/c/guest/main.c -o examples/c/guest/guest -lhyperlight_guest_capi -fuse-ld=lld
+
+run-c-guest: build-c-guest
+    cargo run --manifest-path ./examples/host/Cargo.toml -- ./examples/c/guest/guest

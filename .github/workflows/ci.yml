@@ -47,9 +47,15 @@ jobs:
       if: runner.arch == 'X64'
       shell: bash
       run: just run-guest
-    - name: Test `new` subcommand
+    - name: Build C guest example
       shell: bash
-      run: just test-new
+      run: just build-c-guest
+    - name: Run C guest example
+      shell: bash
+      run: just run-c-guest
+    - name: Run other tests
+      shell: bash
+      run: just test
 
   spelling:
     name: Spell check with typos

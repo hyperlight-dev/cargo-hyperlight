@@ -10,18 +10,18 @@ use crate::cli::Args;
 const CARGO_TOML: &str = include_str!("dummy/_Cargo.toml");
 const LIB_RS: &str = include_str!("dummy/_lib.rs");
 
-#[derive(serde::Deserialize, Default)]
-struct CargoBuildMessageTarget {
-    name: String,
+#[derive(serde::Deserialize, Default, Debug)]
+pub(crate) struct CargoBuildMessageTarget {
+    pub(crate) name: String,
 }
 
-#[derive(serde::Deserialize)]
-struct CargoBuildMessage {
-    reason: String,
+#[derive(serde::Deserialize, Debug)]
+pub(crate) struct CargoBuildMessage {
+    pub(crate) reason: String,
     #[serde(default)]
-    target: CargoBuildMessageTarget,
+    pub(crate) target: CargoBuildMessageTarget,
     #[serde(default)]
-    filenames: Vec<PathBuf>,
+    pub(crate) filenames: Vec<PathBuf>,
 }
 
 pub fn build(args: &Args) -> Result<()> {
@@ -77,7 +77,7 @@ Supported values are:
     let target_dir = args.build_dir();
     let triplet_dir = args.triplet_dir();
     let crate_dir = args.crate_dir();
-    let lib_dir = args.libs_dir();
+    let lib_dir = args.rust_libs_dir();
 
     std::fs::create_dir_all(&triplet_dir).context("Failed to create sysroot directories")?;
     std::fs::write(

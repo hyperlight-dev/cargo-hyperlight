@@ -4,11 +4,13 @@ mod cargo_cmd;
 mod cli;
 mod command;
 mod sysroot;
-mod toolchain;
+pub mod toolchain;
+pub mod toolchain_flags;
 
 use cargo_cmd::CargoCmd;
-use cli::Args;
+pub use cli::Args;
 pub use command::Command;
+mod util;
 
 /// Constructs a new `Command` for launching cargo targeting
 /// [hyperlight](https://github.com/hyperlight-dev/hyperlight) guest code.
@@ -58,12 +60,24 @@ impl Args {
         self.sysroot_dir().join("target")
     }
 
-    pub fn libs_dir(&self) -> std::path::PathBuf {
+    pub fn c_libs_dir(&self) -> std::path::PathBuf {
+        self.sysroot_dir().join("lib")
+    }
+
+    pub fn wrapper_src_dir(&self) -> std::path::PathBuf {
+        self.sysroot_dir().join("wrapper")
+    }
+
+    pub fn wrapper_dir(&self) -> std::path::PathBuf {
+        self.sysroot_dir().join("bin")
+    }
+
+    pub fn rust_libs_dir(&self) -> std::path::PathBuf {
         self.triplet_dir().join("lib")
     }
 
     pub fn includes_dir(&self) -> std::path::PathBuf {
-        self.triplet_dir().join("include")
+        self.sysroot_dir().join("include")
     }
 
     pub fn crate_dir(&self) -> std::path::PathBuf {
@@ -95,7 +109,7 @@ impl CargoCommandExt for std::process::Command {
         } else {
             // do nothing, let cc-rs find ar itself
         }
-        self.append_cflags(&args.target, toolchain::cflags(args));
+        self.append_cflags(&args.target, toolchain::cflags(args).joined());
 
         self
     }

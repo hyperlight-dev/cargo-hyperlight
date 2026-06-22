@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
+use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
-use std::env;
 
 use anyhow::{Context, Result};
 use os_str_bytes::OsStrBytesExt;
@@ -545,6 +545,16 @@ impl Command {
             if arg_str.starts_with("--target=") || arg_str.starts_with("--target-dir=") {
                 continue;
             }
+            if arg_str == "--host" {
+                skip_next = true;
+                continue;
+            }
+            if arg_str.starts_with("--host=") {
+                continue;
+            }
+            if arg_str.starts_with("--with-guest-capi") {
+                continue;
+            }
             command.arg(arg);
         }
         if let Some(cwd) = &self.current_dir {
@@ -586,7 +596,7 @@ impl Command {
         self.cargo.path.as_os_str()
     }
 
-    fn build_args(&self) -> Args {
+    pub fn build_args(&self) -> Args {
         // parse the arguments and environment variables
         match Args::parse(
             self.get_args(),
