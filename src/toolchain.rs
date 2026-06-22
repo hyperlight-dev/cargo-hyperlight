@@ -318,12 +318,21 @@ pub fn find_cc() -> Result<PathBuf> {
 }
 
 pub fn find_ar() -> Result<PathBuf> {
-    if let Ok(path) = which::which("ar") {
-        return Ok(path);
+    #[cfg(not(target_os = "macos"))]
+    let ar = which::which("ar");
+    let llvm_ar = which::which("llvm-ar");
+    // The system archiver on macOS can't deal with ELFs, so check
+    // `llvm-ar` first there (but stillfall back to `ar` when it's not
+    // available, since the correct LLVM ar is named `ar` in some
+    // environments, like when building in Nix);
+    #[cfg(target_os = "macos")]
+    let preferred_ar = llvm_ar.or(ar);
+    #[cfg(not(target_os = "macos"))]
+    let preferred_ar = ar.or(llvm_ar);
+    if let Ok(ar) = preferred_ar {
+        return Ok(ar);
     }
-    if let Ok(path) = which::which("llvm-ar") {
-        return Ok(path);
-    }
+
     // try with postfixed version llvm-ar, e.g., llvm-ar-20
     let re = Regex::new(r"llvm-ar-\d+").unwrap();
     which::which_re(&re)
