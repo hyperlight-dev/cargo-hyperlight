@@ -10,7 +10,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut config = SandboxConfiguration::default();
     config.set_heap_size(1024 * 1024); // 1 MiB
-    config.set_stack_size(1024 * 1024); // 1 MiB
+    config.set_scratch_size(1024 * 1024); // 1 MiB
 
     // create the sandbox
     let mut sbox = hyperlight_host::UninitializedSandbox::new(guest, Some(config))?.evolve()?;

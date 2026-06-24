@@ -29,7 +29,7 @@ fn host_print(s: impl AsRef<[u8]>) -> i32 {
     unsafe { ffi::host_print(s.as_ptr() as _, s.len()) }
 }
 
-pub fn say_hello(func: &FunctionCall) -> Result<Vec<u8>> {
+pub fn say_hello(func: FunctionCall) -> Result<Vec<u8>> {
     let params = func.parameters.as_deref().unwrap_or_default();
     let Some(ParameterValue::String(name)) = params.first() else {
         return Err(HyperlightGuestError::new(
@@ -48,7 +48,7 @@ pub extern "C" fn hyperlight_main() {
         "SayHello".into(),
         [ParameterType::String].into(),
         ReturnType::Int,
-        say_hello as usize,
+        say_hello,
     ));
 }
 

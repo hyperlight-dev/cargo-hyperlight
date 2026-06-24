@@ -5,9 +5,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
-hyperlight-common = { version = "0.11.0", default-features = false }
-hyperlight-guest = "0.11.0"
-hyperlight-guest-bin = "0.11.0"
+hyperlight-common = { version = "0.15.0", default-features = false }
+hyperlight-guest = "0.15.0"
+hyperlight-guest-bin = "0.15.0"
 
 [build-dependencies]
 cc = "1.2"

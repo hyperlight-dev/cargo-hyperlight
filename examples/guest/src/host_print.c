@@ -1,7 +1,9 @@
 #include "host_print.h"
 
-#include <printf.h>
+#include <stdio.h>
 
 int host_print(const char *s, size_t len) {
-    return printf("%.*s", (int)len, s);
+    int n = printf("%.*s", (int)len, s);
+    fflush(stdout);
+    return n;
 }
