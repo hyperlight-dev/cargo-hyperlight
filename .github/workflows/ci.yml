@@ -21,18 +21,27 @@ env:
 
 jobs:
   run-tests:
-    name: Run tests on ${{ matrix.os }}
+    name: Run tests on ${{ matrix.environment }} ${{ matrix.os }}
     strategy:
       matrix:
-        os: ["ubuntu-latest", "windows-latest"]
-    runs-on: ${{ matrix.os }}
+        os: [ "ubuntu-latest", "windows-latest" ]
+        environment: [ "HL", "GH" ]
+    runs-on: ${{ fromJson(
+        matrix.environment == 'HL' &&
+          format('["self-hosted", "{0}", "X64", "1ES.Pool=hld-{1}-amd", "JobId=cargo-hyperlight-{2}-{3}-{4}"]',
+            matrix.os == 'windows-latest' && 'Windows' || 'Linux',
+            matrix.os == 'windows-latest' && 'win2025' || 'kvm',
+            github.run_id,
+            github.run_number,
+            github.run_attempt)
+        || format('["{0}"]', matrix.os) ) }}
     steps:
     - uses: actions/checkout@v7
     - uses: actions-rust-lang/setup-rust-toolchain@v1
     - uses: Swatinem/rust-cache@v2
     - uses: extractions/setup-just@v4
     - name: Enable kvm
-      if: runner.os == 'Linux' && runner.arch == 'X64'
+      if: runner.os == 'Linux' && runner.arch == 'X64' && matrix.environment == 'GH'
       run: |
         echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
         sudo udevadm control --reload-rules
