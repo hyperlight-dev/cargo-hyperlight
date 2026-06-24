@@ -64,7 +64,7 @@ impl Debug for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let args = self.build_args_infallible();
         let mut cmd = self.command();
-        cmd.populate_from_args(&args);
+        cmd.populate_from_args(&args, false);
 
         write!(f, "env ")?;
         if let Some(current_dir) = &self.current_dir {
@@ -659,7 +659,7 @@ impl Command {
             .context("Failed to prepare sysroot")?;
 
         self.command()
-            .populate_from_args(&args)
+            .populate_from_args(&args, false)
             .checked_status()
             .context("Failed to execute cargo")?;
         Ok(())

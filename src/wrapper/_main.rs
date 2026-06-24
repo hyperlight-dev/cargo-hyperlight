@@ -23,7 +23,7 @@ fn usage() -> ! {
 fn hyperlight_config(args: &Args, mut cmd: env::ArgsOs) {
     while let Some(flag) = cmd.next() {
         if flag == "--cflags" {
-            println!("{}", toolchain_flags::cflags(&args).joined().to_str().unwrap());
+            println!("{}", toolchain_flags::cflags(&args, false).joined().to_str().unwrap());
         } else if flag == "--ldflags" {
             println!("{}", toolchain_flags::ldflags(&args).joined().to_str().unwrap());
         } else if flag == "--libs" {
@@ -73,7 +73,7 @@ fn clang(args: &Args, tool_name: &str, cmd: env::ArgsOs) {
     let cmd: Vec<_> = cmd.collect();
     let info = parse_clang_cmd(cmd.iter().map(<OsString as AsRef<OsStr>>::as_ref));
     let mut proc = std::process::Command::new(find_next(args, tool_name));
-    proc.args(toolchain_flags::cflags(&args).0);
+    proc.args(toolchain_flags::cflags(&args, false).0);
     if info.will_link() {
         proc.args(toolchain_flags::ldflags(&args).0);
     }

@@ -86,11 +86,11 @@ impl Args {
 }
 
 trait CargoCommandExt {
-    fn populate_from_args(&mut self, args: &Args) -> &mut Self;
+    fn populate_from_args(&mut self, args: &Args, bootstrap: bool) -> &mut Self;
 }
 
 impl CargoCommandExt for std::process::Command {
-    fn populate_from_args(&mut self, args: &Args) -> &mut Self {
+    fn populate_from_args(&mut self, args: &Args, bootstrap: bool) -> &mut Self {
         self.target(&args.target);
         self.sysroot(args.sysroot_dir());
         self.append_rustflags("--cfg=hyperlight");
@@ -109,7 +109,7 @@ impl CargoCommandExt for std::process::Command {
         } else {
             // do nothing, let cc-rs find ar itself
         }
-        self.append_cflags(&args.target, toolchain::cflags(args).joined());
+        self.append_cflags(&args.target, toolchain::cflags(args, bootstrap).joined());
 
         self
     }

@@ -87,8 +87,8 @@ fn find_package_dirs(args: &Args) -> Result<PackageDirectories> {
     })
 }
 
-fn copy_includes(src_dir: &Path, dst_dir: &Path) -> Result<()> {
-    util::copy_glob(src_dir, dst_dir, "**/*.h")
+fn copy_includes(src_dirs: impl Iterator<Item: AsRef<Path>>, dst_dir: &Path) -> Result<()> {
+    util::union_glob(src_dirs, dst_dir, "**/*.h")
 }
 
 fn build_guest_capi(args: &Args, capi_dir: &Path) -> Result<()> {
@@ -101,7 +101,7 @@ fn build_guest_capi(args: &Args, capi_dir: &Path) -> Result<()> {
         .target_dir(args.build_dir())
         .arg("--message-format=json")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
-        .populate_from_args(args)
+        .populate_from_args(args, true)
         .output()
         .context("Failed to build capi cargo project")?;
     ensure!(
@@ -269,14 +269,20 @@ pub fn prepare(args: &Args) -> Result<()> {
         include_dirs.push("third_party/musl/arch/x86_64");
     }
 
-    for dir in include_dirs {
-        copy_includes(&libc_dir.join(dir), &include_dst_dir)?;
-    }
-    if args.with_guest_capi {
-        let capi_dir = package_dirs.guest_capi()?;
-        build_guest_capi(args, &capi_dir)?;
-        copy_includes(&capi_dir.join("include"), &include_dst_dir)?;
-    }
+    let capi_dir = args
+        .with_guest_capi
+        .then(|| {
+            let d = package_dirs.guest_capi()?;
+            build_guest_capi(args, &d)?;
+            Ok::<_, anyhow::Error>(d)
+        })
+        .transpose()?;
+
+    let include_dirs = include_dirs
+        .into_iter()
+        .map(|dir| libc_dir.join(dir))
+        .chain(capi_dir.map(|x| x.join("include")));
+    copy_includes(include_dirs, &include_dst_dir)?;
 
     build_wrappers(args)?;
 
@@ -295,8 +301,8 @@ impl From<&Args> for toolchain_flags::Args {
     }
 }
 
-pub fn cflags(args: &Args) -> toolchain_flags::Flags {
-    toolchain_flags::cflags(&args.into())
+pub fn cflags(args: &Args, bootstrap: bool) -> toolchain_flags::Flags {
+    toolchain_flags::cflags(&args.into(), bootstrap)
 }
 pub fn ldflags(args: &Args) -> toolchain_flags::Flags {
     toolchain_flags::ldflags(&args.into())

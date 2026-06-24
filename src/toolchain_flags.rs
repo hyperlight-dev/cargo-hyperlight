@@ -45,7 +45,7 @@ impl Flags {
     }
 }
 
-pub(crate) fn cflags(args: &Args) -> Flags {
+pub(crate) fn cflags(args: &Args, bootstrap: bool) -> Flags {
     const COMMON_FLAGS: &[&str] = &[
         "-U__linux__",
         "-fPIC",
@@ -78,8 +78,10 @@ pub(crate) fn cflags(args: &Args) -> Flags {
         })
         .for_each(|x| flags.push(os(x)));
 
-    flags.push(os("-isystem"));
-    flags.push(Cow::Owned(args.includes_dir.clone().into()));
+    if !bootstrap {
+        flags.push(os("-isystem"));
+        flags.push(Cow::Owned(args.includes_dir.clone().into()));
+    }
     Flags(flags)
 }
 

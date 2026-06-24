@@ -1,5 +1,5 @@
-use std::env;
 use std::ffi::{OsStr, OsString};
+use std::{env, iter};
 
 use anyhow::{Result, anyhow};
 use cargo_hyperlight::{Args, cargo, toolchain, toolchain_flags};
@@ -30,7 +30,7 @@ impl FlagKind {
     fn get_flags(&self, args: &Args) -> toolchain_flags::Flags {
         use FlagKind::*;
         match self {
-            C => toolchain::cflags(args),
+            C => toolchain::cflags(args, false),
             Ld => toolchain::ldflags(args),
             Libs => toolchain::libs(args),
         }
@@ -73,14 +73,18 @@ impl SpecialCommand {
                     .as_ref()
                     .ok_or(anyhow!("Usage: cargo-hyperlight build-c-sysroot [opts] --c-sysroot-dir </path/to/sysroot>"))?;
                 built_args.prepare_sysroot()?;
-                util::copy_glob(&built_args.wrapper_dir(), &sysroot_dir.join("bin"), "**/*")?;
-                util::copy_glob(
-                    &built_args.includes_dir(),
+                util::union_glob(
+                    iter::once(&built_args.wrapper_dir()),
+                    &sysroot_dir.join("bin"),
+                    "**/*",
+                )?;
+                util::union_glob(
+                    iter::once(&built_args.includes_dir()),
                     &sysroot_dir.join("include"),
                     "**/*.h",
                 )?;
-                util::copy_glob_with_predicate(
-                    &built_args.c_libs_dir(),
+                util::union_glob_with_predicate(
+                    iter::once(&built_args.c_libs_dir()),
                     &sysroot_dir.join("lib"),
                     "**/*",
                     |x| !x.starts_with("rustlib"),
