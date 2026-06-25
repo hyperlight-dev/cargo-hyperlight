@@ -22,10 +22,6 @@ pub trait CargoCmd {
         flags: impl AsRef<OsStr>,
     ) -> &mut Self;
     fn allow_unstable(&mut self) -> &mut Self;
-    fn resolve_env(
-        &self,
-        base: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)>,
-    ) -> HashMap<OsString, OsString>;
     fn checked_output(&mut self) -> Result<CheckedOutput>;
     fn checked_status(&mut self) -> Result<()>;
 }
@@ -48,8 +44,8 @@ impl CargoBinary {
 
 pub fn find_cargo() -> Result<CargoBinary> {
     let cargo = match env::var_os("CARGO") {
-        Some(cargo) => Path::new(&cargo).canonicalize()?,
-        None => which::which("cargo")?.canonicalize()?,
+        Some(cargo) => PathBuf::from(cargo),
+        None => which::which("cargo")?,
     };
     let rustup_toolchain = env::var_os("RUSTUP_TOOLCHAIN");
     Ok(CargoBinary {
@@ -193,13 +189,6 @@ impl CargoCmd for Command {
 
     fn allow_unstable(&mut self) -> &mut Self {
         self.env("RUSTC_BOOTSTRAP", "1")
-    }
-
-    fn resolve_env(
-        &self,
-        base: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)>,
-    ) -> HashMap<OsString, OsString> {
-        merge_env(base, self.get_envs())
     }
 
     fn checked_output(&mut self) -> Result<CheckedOutput> {

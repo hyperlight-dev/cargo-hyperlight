@@ -1,0 +1,8 @@
+[package]
+name = "fetch_hyperlight_guest_capi"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+hyperlight_guest_capi = { git = "https://github.com/hyperlight-dev/hyperlight", rev = "v0.15.0" }

@@ -1,10 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
-use std::convert::Infallible;
-use std::ffi::{OsStr, OsString, c_char};
+use std::env;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
-use std::{env, iter};
 
 use anyhow::{Context, Result};
 use os_str_bytes::OsStrBytesExt;
@@ -65,7 +64,7 @@ impl Debug for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let args = self.build_args_infallible();
         let mut cmd = self.command();
-        cmd.populate_from_args(&args);
+        cmd.populate_from_args(&args, false);
 
         write!(f, "env ")?;
         if let Some(current_dir) = &self.current_dir {
@@ -529,7 +528,35 @@ impl Command {
 
     fn command(&self) -> StdCommand {
         let mut command = self.cargo.command();
-        command.args(self.get_args());
+        // Filter out --target and --target-dir from forwarded args since
+        // populate_from_args sets them via env vars with the resolved values
+        let args: Vec<_> = self.get_args().map(|a| a.to_owned()).collect();
+        let mut skip_next = false;
+        for arg in args.iter() {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            let arg_str = arg.to_string_lossy();
+            if arg_str == "--target" || arg_str == "--target-dir" {
+                skip_next = true; // skip the next arg (the value)
+                continue;
+            }
+            if arg_str.starts_with("--target=") || arg_str.starts_with("--target-dir=") {
+                continue;
+            }
+            if arg_str == "--host" {
+                skip_next = true;
+                continue;
+            }
+            if arg_str.starts_with("--host=") {
+                continue;
+            }
+            if arg_str.starts_with("--with-guest-capi") {
+                continue;
+            }
+            command.arg(arg);
+        }
         if let Some(cwd) = &self.current_dir {
             command.current_dir(cwd);
         }
@@ -569,7 +596,7 @@ impl Command {
         self.cargo.path.as_os_str()
     }
 
-    fn build_args(&self) -> Args {
+    pub fn build_args(&self) -> Args {
         // parse the arguments and environment variables
         match Args::parse(
             self.get_args(),
@@ -632,132 +659,11 @@ impl Command {
             .context("Failed to prepare sysroot")?;
 
         self.command()
-            .populate_from_args(&args)
+            .populate_from_args(&args, false)
             .checked_status()
             .context("Failed to execute cargo")?;
         Ok(())
     }
-
-    /// Executes the cargo command, replacing the current process.
-    ///
-    /// This function will never return on success, as it replaces the current process
-    /// with the cargo process. On error, it will print the error and exit with code 101.
-    ///
-    /// # Examples
-    ///
-    /// Basic usage:
-    ///
-    /// ```no_run
-    /// use cargo_hyperlight::cargo;
-    ///
-    /// cargo()
-    ///     .unwrap()
-    ///     .arg("build")
-    ///     .exec(); // This will never return
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// This function will exit the process with code 101 if:
-    /// - The sysroot preparation fails
-    /// - The process replacement fails
-    pub fn exec(&self) -> ! {
-        match self.exec_impl() {
-            Err(e) => {
-                eprintln!("{e:?}");
-                std::process::exit(101);
-            }
-        }
-    }
-
-    /// Internal implementation of process replacement.
-    ///
-    /// This method prepares the sysroot and then calls the low-level `exec` function
-    /// to replace the current process.
-    fn exec_impl(&self) -> anyhow::Result<Infallible> {
-        let args = self.build_args();
-
-        args.prepare_sysroot()
-            .context("Failed to prepare sysroot")?;
-
-        let mut command = self.command();
-        command.populate_from_args(&args);
-
-        if let Some(cwd) = self.get_current_dir() {
-            env::set_current_dir(cwd).context("Failed to change current directory")?;
-        }
-
-        Ok(exec(
-            command.get_program(),
-            command.get_args(),
-            command.resolve_env(self.base_env()),
-        )?)
-    }
-}
-
-/// Replaces the current process with the specified program using `execvpe`.
-///
-/// This function converts the provided arguments and environment variables into
-/// the format expected by the `execvpe` system call and then replaces the current
-/// process with the new program.
-///
-/// # Arguments
-///
-/// * `program` - The path to the program to execute
-/// * `args` - The command-line arguments to pass to the program
-/// * `envs` - The environment variables to set for the new process
-///
-/// # Returns
-///
-/// This function should never return on success. On failure, it returns an
-/// `std::io::Error` describing what went wrong.
-///
-/// # Safety
-///
-/// This function uses unsafe code to call `libc::execvpe`. The implementation
-/// carefully manages memory to ensure null-terminated strings are properly
-/// constructed for the system call.
-fn exec(
-    program: impl AsRef<OsStr>,
-    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
-    envs: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)>,
-) -> std::io::Result<Infallible> {
-    let mut env_bytes = vec![];
-    let mut env_offsets = vec![];
-    for (k, v) in envs.into_iter() {
-        env_offsets.push(env_bytes.len());
-        env_bytes.extend_from_slice(k.as_ref().as_encoded_bytes());
-        env_bytes.push(b'=');
-        env_bytes.extend_from_slice(v.as_ref().as_encoded_bytes());
-        env_bytes.push(0);
-    }
-    let env_ptrs = env_offsets
-        .into_iter()
-        .map(|offset| env_bytes[offset..].as_ptr() as *const c_char)
-        .chain(iter::once(std::ptr::null()))
-        .collect::<Vec<_>>();
-
-    let mut arg_bytes = vec![];
-    let mut arg_offsets = vec![];
-
-    arg_offsets.push(arg_bytes.len());
-    arg_bytes.extend_from_slice(program.as_ref().as_encoded_bytes());
-    arg_bytes.push(0);
-
-    for arg in args {
-        arg_offsets.push(arg_bytes.len());
-        arg_bytes.extend_from_slice(arg.as_ref().as_encoded_bytes());
-        arg_bytes.push(0);
-    }
-    let arg_ptrs = arg_offsets
-        .into_iter()
-        .map(|offset| arg_bytes[offset..].as_ptr() as *const c_char)
-        .chain(iter::once(std::ptr::null()))
-        .collect::<Vec<_>>();
-
-    unsafe { libc::execvpe(arg_ptrs[0], arg_ptrs.as_ptr(), env_ptrs.as_ptr()) };
-
-    Err(std::io::Error::last_os_error())
 }
 
 /// Returns `true` if the given environment variable should be preserved

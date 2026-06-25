@@ -29,6 +29,11 @@ fn main() {
     println!("cargo:rustc-env=GIT_HASH={}", git_hash);
     println!("cargo:rustc-env=GIT_DATE={}", git_date);
 
+    println!(
+        "cargo:rustc-env=CARGO_HYPERLIGHT_HOST_TRIPLE={}",
+        std::env::var("TARGET").unwrap()
+    );
+
     // Re-run build script if git HEAD changes
     println!("cargo:rerun-if-changed=.git/HEAD");
 }

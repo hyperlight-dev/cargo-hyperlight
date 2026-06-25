@@ -17,6 +17,9 @@ pub struct Args {
     pub manifest_path: Option<PathBuf>,
     pub target_dir: PathBuf,
     pub target: String,
+    pub host: String,
+    pub with_guest_capi: bool,
+    pub c_sysroot_dir: Option<PathBuf>,
     pub env: HashMap<OsString, OsString>,
     pub current_dir: PathBuf,
     pub clang: Option<PathBuf>,
@@ -170,10 +173,17 @@ impl Args {
 
         let target_dir = value.current_dir.join(target_dir);
 
+        let host = value
+            .host
+            .unwrap_or(env!("CARGO_HYPERLIGHT_HOST_TRIPLE").to_string());
+
         Ok(Args {
             manifest_path,
             target_dir,
             target,
+            host,
+            with_guest_capi: value.with_guest_capi,
+            c_sysroot_dir: value.c_sysroot_dir,
             env: value.env,
             current_dir: value.current_dir,
             clang: toolchain::find_cc().ok(),
@@ -196,11 +206,36 @@ struct ArgsImpl {
     /// Target triple to build for
     target: Option<String>,
 
+    /// Target triple to use for host utilities/wrappers, enabling a
+    /// building a distributable C sysroot for Canadian cross usecases
+    host: Option<String>,
+
+    /// Whether to include hyperlight-guest-capi headers and libs in
+    /// the built sysroot, used for building distributable C sysroots
+    with_guest_capi: bool,
+
+    /// When building a C sysroot, the target C sysroot directory
+    c_sysroot_dir: Option<PathBuf>,
+
     /// Environment variables to set
     env: HashMap<OsString, OsString>,
 
     /// Current working directory
     pub current_dir: PathBuf,
+}
+
+fn parse_flag(flag: &str, arg: &OsStr) -> Option<bool> {
+    let value = arg.strip_prefix(flag)?;
+    if value.is_empty() {
+        Some(true)
+    } else {
+        let lower = value.strip_prefix("=")?.to_ascii_lowercase();
+        if lower == "false" || lower == "0" {
+            Some(false)
+        } else {
+            Some(true)
+        }
+    }
 }
 
 fn parse_arg(
@@ -236,6 +271,15 @@ impl ArgsImpl {
             if let Some(triplet) = parse_arg("--target", &arg, &mut args) {
                 this.target = Some(triplet.to_string_lossy().to_string());
                 continue;
+            }
+            if let Some(host) = parse_arg("--host", &arg, &mut args) {
+                this.host = Some(host.to_string_lossy().to_string());
+            }
+            if let Some(capi) = parse_flag("--with-guest-capi", &arg) {
+                this.with_guest_capi = capi;
+            }
+            if let Some(dir) = parse_arg("--c-sysroot-dir", &arg, &mut args) {
+                this.c_sysroot_dir = Some(PathBuf::from(dir));
             }
         }
         this

@@ -1,2 +1,4 @@
 /target
-/examples/*/target
+/examples/**/target
+/examples/c/sysroot
+/examples/c/guest/guest

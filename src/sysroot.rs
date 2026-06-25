@@ -10,18 +10,18 @@ use crate::cli::Args;
 const CARGO_TOML: &str = include_str!("dummy/_Cargo.toml");
 const LIB_RS: &str = include_str!("dummy/_lib.rs");
 
-#[derive(serde::Deserialize, Default)]
-struct CargoBuildMessageTarget {
-    name: String,
+#[derive(serde::Deserialize, Default, Debug)]
+pub(crate) struct CargoBuildMessageTarget {
+    pub(crate) name: String,
 }
 
-#[derive(serde::Deserialize)]
-struct CargoBuildMessage {
-    reason: String,
+#[derive(serde::Deserialize, Debug)]
+pub(crate) struct CargoBuildMessage {
+    pub(crate) reason: String,
     #[serde(default)]
-    target: CargoBuildMessageTarget,
+    pub(crate) target: CargoBuildMessageTarget,
     #[serde(default)]
-    filenames: Vec<PathBuf>,
+    pub(crate) filenames: Vec<PathBuf>,
 }
 
 pub fn build(args: &Args) -> Result<()> {
@@ -45,10 +45,31 @@ pub fn build(args: &Args) -> Result<()> {
             spec.remove("rustc-abi");
             spec
         }
+        "aarch64-hyperlight-none" => {
+            let mut spec = get_spec(args, "aarch64-unknown-none")?;
+            let Value::Object(custom) = json!({
+                "code-model": "small",
+                "linker": "rust-lld",
+                "linker-flavor": "gnu-lld",
+                "pre-link-args": {
+                    "gnu-lld": ["-znostart-stop-gc"],
+                },
+                "relocation-model": "pic",
+                "direct-access-external-data": true,
+                "position-independent-executables": true,
+                "features": "+v8.1a,+strict-align,+neon,+fp-armv8"
+            }) else {
+                unreachable!()
+            };
+            spec.extend(custom);
+            spec.remove("rustc-abi");
+            spec
+        }
         triplet => bail!(
             "Unsupported target triple: {triplet:?}
 Supported values are:
- * x86_64-hyperlight-none"
+ * x86_64-hyperlight-none
+ * aarch64-hyperlight-none"
         ),
     };
 
@@ -56,7 +77,7 @@ Supported values are:
     let target_dir = args.build_dir();
     let triplet_dir = args.triplet_dir();
     let crate_dir = args.crate_dir();
-    let lib_dir = args.libs_dir();
+    let lib_dir = args.rust_libs_dir();
 
     std::fs::create_dir_all(&triplet_dir).context("Failed to create sysroot directories")?;
     std::fs::write(
@@ -180,7 +201,8 @@ fn get_spec(args: &Args, triplet: impl AsRef<str>) -> Result<Map<String, Value>>
         .envs(args.env.iter())
         .current_dir(&args.current_dir)
         .arg("rustc")
-        .target(triplet)
+        .arg("--target")
+        .arg(triplet.as_ref())
         .manifest_path(&args.manifest_path)
         .arg("-Zunstable-options")
         .arg("--print=target-spec-json")
