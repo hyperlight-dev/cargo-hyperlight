@@ -87,6 +87,36 @@ Your binary will be built for the `x86_64-hyperlight-none` target (or `aarch64-h
 
 There's no need for any extra configuration, the command will take care of everything.
 
+## Building C Guests
+
+cargo-hyperlight also supports building C guest binaries. To get the compiler and linker flags needed to build a C guest, use:
+
+```sh
+cargo hyperlight cflags
+cargo hyperlight ldflags
+cargo hyperlight libs
+```
+
+For example, to compile and link a C guest:
+```sh
+clang $(cargo hyperlight cflags) $(cargo hyperlight ldflags) -o guest main.c $(cargo hyperlight libs)
+```
+
+### Building a C Sysroot
+
+To produce a self-contained, redistributable C sysroot (including headers, libraries, a `hyperlight-config` utility, and a clang wrapper), use:
+
+```sh
+cargo hyperlight build-c-sysroot --c-sysroot-dir /path/to/sysroot
+```
+
+This copies the following into the specified directory:
+- `bin/` — a `hyperlight-config` executable and a `clang` wrapper
+- `include/` — header files for the guest C API
+- `lib/` — static libraries needed to link a C guest
+
+The produced `hyperlight-config` executable provides the same `--cflags`, `--ldflags`, and `--libs` flags, and the `clang` wrapper automatically injects the correct flags when invoked. This allows downstream consumers to build C guests without installing `cargo-hyperlight` themselves.
+
 ## Releasing
 
 To publish a new version:
