@@ -324,7 +324,6 @@ pub fn find_cc() -> Result<PathBuf> {
 }
 
 pub fn find_ar() -> Result<PathBuf> {
-    #[cfg(not(target_os = "macos"))]
     let ar = which::which("ar");
     let llvm_ar = which::which("llvm-ar");
     // The system archiver on macOS can't deal with ELFs, so check
