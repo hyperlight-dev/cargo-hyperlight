@@ -92,6 +92,7 @@ trait CargoCommandExt {
 impl CargoCommandExt for std::process::Command {
     fn populate_from_args(&mut self, args: &Args, bootstrap: bool) -> &mut Self {
         self.target(&args.target);
+        self.target_dir(&args.target_dir);
         self.sysroot(args.sysroot_dir());
         self.append_rustflags("--cfg=hyperlight");
         self.append_rustflags("--check-cfg=cfg(hyperlight)");
