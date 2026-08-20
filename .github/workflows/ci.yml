@@ -84,6 +84,68 @@ jobs:
       shell: bash
       run: just test
 
+  toolchain-support:
+    name: Detect target spec support on Rust ${{ matrix.toolchain }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Custom target specifications, which describe the hyperlight guest
+          # targets, are stable up to Rust 1.94 ...
+          - toolchain: "1.94.0"
+            expected: supported
+          # ... were made unstable in 1.95, so stable releases from then on
+          # cannot build a guest ...
+          - toolchain: "1.95.0"
+            expected: unsupported
+          # ... but nightly can, behind `-Zunstable-options`.
+          - toolchain: "nightly"
+            expected: supported
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Builds cargo-hyperlight itself, so it uses the pinned toolchain from
+      # rust-toolchain.toml rather than the one under test.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # See the comment in the `run-tests` job.
+          rustflags: ""
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v4
+      - name: Install cargo-hyperlight
+        shell: bash
+        run: just install
+      - name: Install Rust ${{ matrix.toolchain }}
+        shell: bash
+        # cargo-hyperlight installs the rust-src component itself when it needs it.
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+      - name: Build a guest with Rust ${{ matrix.toolchain }}
+        shell: bash
+        env:
+          RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+          EXPECTED: ${{ matrix.expected }}
+        run: |
+          if just build-guest > build.log 2>&1; then
+            actual=supported
+          else
+            actual=unsupported
+          fi
+          cat build.log
+
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "::error::expected this toolchain to be $EXPECTED, but the build reported it as $actual"
+            exit 1
+          fi
+
+          # A toolchain we reject must be rejected up front, with the
+          # diagnostic that tells the user how to fix it, rather than failing
+          # somewhere deeper in the build.
+          if [ "$EXPECTED" = unsupported ] &&
+             ! grep -q "This toolchain cannot build for" build.log; then
+            echo "::error::the build failed, but not with the expected diagnostic"
+            exit 1
+          fi
+
   spelling:
     name: Spell check with typos
     runs-on: ubuntu-latest

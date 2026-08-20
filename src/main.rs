@@ -63,14 +63,14 @@ impl SpecialCommand {
             Perf => perf::run(args)?,
             New => new::run(args)?,
             BuildCSysroot => {
-                let built_args = cargo()?
+                let mut built_args = cargo()?
                     // a C sysroot needs the C API library
                     .arg("--with-guest-capi")
                     .args(args)
                     .build_args();
                 let sysroot_dir = built_args
                     .c_sysroot_dir
-                    .as_ref()
+                    .clone()
                     .ok_or(anyhow!("Usage: cargo-hyperlight build-c-sysroot [opts] --c-sysroot-dir </path/to/sysroot>"))?;
                 built_args.prepare_sysroot()?;
                 util::union_glob(
@@ -91,7 +91,7 @@ impl SpecialCommand {
                 )?;
             }
             Flags(k) => {
-                let built_args = cargo()?.args(args).build_args();
+                let mut built_args = cargo()?.args(args).build_args();
                 built_args.prepare_sysroot()?;
                 let flags = k.get_flags(&built_args).joined();
                 println!("{}", flags.to_str().ok_or(anyhow!("flags were not UTF-8"))?);
@@ -99,6 +99,10 @@ impl SpecialCommand {
         }
         Ok(())
     }
+}
+
+fn run_cargo(args: impl Iterator<Item = OsString>) -> Result<()> {
+    cargo()?.args(args).status()
 }
 
 fn main() {
@@ -109,16 +113,13 @@ fn main() {
         args.next();
     }
 
-    if let Some(sc) = args.peek().and_then(|x| SpecialCommand::parse(x)) {
-        if let Err(e) = sc.execute(args) {
-            eprintln!("{e:?}");
-            std::process::exit(1);
-        }
-    } else {
-        cargo()
-            .expect("Failed to create cargo command")
-            .args(args)
-            .status()
-            .expect("Failed to execute cargo");
+    let result = match args.peek().and_then(|x| SpecialCommand::parse(x)) {
+        Some(sc) => sc.execute(args),
+        None => run_cargo(args),
+    };
+
+    if let Err(e) = result {
+        eprintln!("{e:?}");
+        std::process::exit(1);
     }
 }

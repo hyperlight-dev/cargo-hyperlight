@@ -24,6 +24,9 @@ pub struct Args {
     pub current_dir: PathBuf,
     pub clang: Option<PathBuf>,
     pub ar: Option<PathBuf>,
+    /// Whether rustc needs `-Zunstable-options` to load the custom target
+    /// specification. Detected by [`Args::prepare_sysroot`].
+    pub unstable_target_spec: bool,
 }
 
 pub trait WarningLevel {
@@ -188,6 +191,7 @@ impl Args {
             current_dir: value.current_dir,
             clang: toolchain::find_cc().ok(),
             ar: toolchain::find_ar().ok(),
+            unstable_target_spec: false,
         })
     }
 }
