@@ -43,8 +43,15 @@ fn new_host_and_guest() {
 
     let guest_toml = std::fs::read_to_string(project.join("guest/Cargo.toml")).unwrap();
     assert!(guest_toml.contains("name = \"myproject-guest\""));
+    assert!(guest_toml.contains("hyperlight-guest-bin = \"0.16\""));
     let host_toml = std::fs::read_to_string(project.join("host/Cargo.toml")).unwrap();
     assert!(host_toml.contains("name = \"myproject-host\""));
+    assert!(host_toml.contains("hyperlight-host = \"0.16\""));
+    let host_main = std::fs::read_to_string(project.join("host/src/main.rs")).unwrap();
+    assert!(host_main.contains(&format!(
+        "target/{}-hyperlight-none/debug/myproject-guest",
+        std::env::consts::ARCH
+    )));
 
     // Clippy
     run(cargo()
