@@ -1,4 +1,7 @@
 [toolchain]
-channel = "1.89.0"
+# Pinned to 1.94.0: rustc 1.95+ dropped support for custom target specs passed
+# as `--target <target-spec>.json`, which we rely on to build the
+# `x86_64-hyperlight-none` target and its sysroot.
+channel = "1.94.0"
 profile = "default"
 components = ["rustfmt", "clippy"]
