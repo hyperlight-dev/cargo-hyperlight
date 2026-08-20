@@ -653,7 +653,7 @@ impl Command {
     /// - The cargo process could not be spawned
     /// - The cargo process returned a non-zero exit status
     pub fn status(&self) -> anyhow::Result<()> {
-        let args = self.build_args();
+        let mut args = self.build_args();
 
         args.prepare_sysroot()
             .context("Failed to prepare sysroot")?;

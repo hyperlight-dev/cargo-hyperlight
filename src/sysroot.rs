@@ -1,5 +1,7 @@
+use std::ffi::OsStr;
 use std::ops::Not as _;
 use std::path::PathBuf;
+use std::process::{Output, Stdio};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Map, Value, json};
@@ -9,6 +11,101 @@ use crate::cli::Args;
 
 const CARGO_TOML: &str = include_str!("dummy/_Cargo.toml");
 const LIB_RS: &str = include_str!("dummy/_lib.rs");
+
+/// Flag that gates loading a custom target specification. Custom targets
+/// became unstable in Rust 1.95, so newer toolchains only accept them on the
+/// nightly channel and only when this flag is passed.
+pub(crate) const UNSTABLE_TARGET_SPEC_FLAG: &str = "-Zunstable-options";
+
+/// Queries the version of the cargo release in use.
+fn cargo_version(args: &Args) -> Result<semver::Version> {
+    let output = cargo_cmd()?
+        .env_clear()
+        .envs(args.env.iter())
+        .current_dir(&args.current_dir)
+        .arg("version")
+        .arg("--verbose")
+        .checked_output()
+        .context("Failed to get cargo version")?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let release = stdout
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("release: "))
+        .map(str::trim)
+        .context("Failed to parse cargo version")?;
+
+    semver::Version::parse(release)
+        .with_context(|| format!("Failed to parse cargo version {release:?}"))
+}
+
+/// Asks rustc to print the configuration of the hyperlight target, which forces
+/// it to load the custom target specification from the sysroot.
+fn probe_target_spec(args: &Args, extra_flags: &[&str]) -> Result<Output> {
+    let rustc = match args.env.get(OsStr::new("RUSTC")) {
+        Some(rustc) => PathBuf::from(rustc),
+        None => which::which("rustc").context("Failed to find rustc")?,
+    };
+
+    std::process::Command::new(rustc)
+        .env_clear()
+        .envs(args.env.iter())
+        .current_dir(&args.current_dir)
+        .arg("--sysroot")
+        .arg(args.sysroot_dir())
+        .arg("--target")
+        .arg(&args.target)
+        .args(extra_flags)
+        .arg("--print=cfg")
+        .stdin(Stdio::null())
+        .output()
+        .context("Failed to run rustc")
+}
+
+/// Checks that the toolchain in use can load the custom target specification
+/// describing the hyperlight guest target, and records whether doing so
+/// requires [`UNSTABLE_TARGET_SPEC_FLAG`].
+///
+/// The target specification must already have been written to the sysroot.
+fn check_target_spec_support(args: &mut Args) -> Result<()> {
+    let output = probe_target_spec(args, &[])?;
+    if output.status.success() {
+        args.unstable_target_spec = false;
+        return Ok(());
+    }
+
+    if probe_target_spec(args, &[UNSTABLE_TARGET_SPEC_FLAG])?
+        .status
+        .success()
+    {
+        args.unstable_target_spec = true;
+        return Ok(());
+    }
+
+    let target = &args.target;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    bail!(
+        "This toolchain cannot build for {target}.
+
+The hyperlight guest targets are described by a custom target specification, \
+which rustc rejected:
+
+{}
+
+Custom target specifications were made unstable in Rust 1.95, so they are only \
+available on earlier releases or on nightly. For example, pin the toolchain for \
+your project by adding a `rust-toolchain.toml` file next to your `Cargo.toml`:
+
+    [toolchain]
+    channel = \"1.94.0\"
+
+or select the toolchain for a single invocation with rustup:
+
+    cargo +1.94.0 hyperlight build
+    cargo +nightly hyperlight build",
+        stderr.trim_end()
+    );
+}
 
 #[derive(serde::Deserialize, Default, Debug)]
 pub(crate) struct CargoBuildMessageTarget {
@@ -24,7 +121,9 @@ pub(crate) struct CargoBuildMessage {
     pub(crate) filenames: Vec<PathBuf>,
 }
 
-pub fn build(args: &Args) -> Result<()> {
+pub fn build(args: &mut Args) -> Result<()> {
+    let cargo_version = cargo_version(args)?;
+
     let target_spec = match args.target.as_str() {
         "x86_64-hyperlight-none" => {
             let mut spec = get_spec(args, "x86_64-unknown-none")?;
@@ -86,22 +185,9 @@ Supported values are:
     )
     .context("Failed to write target spec file")?;
 
-    let version = cargo_cmd()?
-        .env_clear()
-        .envs(args.env.iter())
-        .current_dir(&args.current_dir)
-        .arg("version")
-        .arg("--verbose")
-        .checked_output()
-        .context("Failed to get cargo version")?;
+    check_target_spec_support(args)?;
 
-    let version = String::from_utf8_lossy(&version.stdout);
-    let version = version
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("release: "))
-        .context("Failed to parse cargo version")?;
-
-    let cargo_toml = CARGO_TOML.replace("0.0.0", version);
+    let cargo_toml = CARGO_TOML.replace("0.0.0", &cargo_version.to_string());
 
     std::fs::create_dir_all(&crate_dir).context("Failed to create target directory")?;
     std::fs::write(crate_dir.join("Cargo.toml"), cargo_toml)
@@ -136,6 +222,11 @@ Supported values are:
         .arg("--message-format=json")
         // The core, alloc and compiler_builtins crates use unstable features
         .allow_unstable()
+        .append_rustflags(if args.unstable_target_spec {
+            UNSTABLE_TARGET_SPEC_FLAG
+        } else {
+            ""
+        })
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .sysroot(&sysroot_dir)
         .output()

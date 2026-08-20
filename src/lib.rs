@@ -96,6 +96,9 @@ impl CargoCommandExt for std::process::Command {
         self.sysroot(args.sysroot_dir());
         self.append_rustflags("--cfg=hyperlight");
         self.append_rustflags("--check-cfg=cfg(hyperlight)");
+        if args.unstable_target_spec {
+            self.append_rustflags(sysroot::UNSTABLE_TARGET_SPEC_FLAG);
+        }
         self.entrypoint("entrypoint");
         if let Some(clang) = &args.clang {
             self.cc_env(&args.target, clang);
@@ -117,7 +120,7 @@ impl CargoCommandExt for std::process::Command {
 }
 
 impl Args {
-    pub fn prepare_sysroot(&self) -> Result<()> {
+    pub fn prepare_sysroot(&mut self) -> Result<()> {
         // Build sysroot
         sysroot::build(self)?;
 
