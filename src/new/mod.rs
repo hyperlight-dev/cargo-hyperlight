@@ -5,9 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
 
-const HYPERLIGHT_VERSION: &str = "0.15";
-// TODO: support aarch64-hyperlight-none when aarch64 guests are supported.
-const GUEST_ARCH: &str = "x86_64";
+const HYPERLIGHT_VERSION: &str = "0.16";
+const GUEST_ARCH: &str = std::env::consts::ARCH;
 
 const GUEST_CARGO_TOML: &str = include_str!("guest/_Cargo.toml");
 const GUEST_MAIN_RS: &str = include_str!("guest/_main.rs");
