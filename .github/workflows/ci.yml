@@ -38,14 +38,32 @@ jobs:
     steps:
     - uses: actions/checkout@v7
     - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        # Don't let the action put `-D warnings` in RUSTFLAGS. cargo-hyperlight
+        # builds third-party crates (e.g. hyperlight-guest-capi and its
+        # dependencies) by manifest path, so cargo treats them as local crates
+        # and does not apply `--cap-lints allow`. A warning in any of them would
+        # then fail the build. Lints are enforced by the `check` job instead.
+        rustflags: ""
     - uses: Swatinem/rust-cache@v2
     - uses: extractions/setup-just@v4
     - name: Enable kvm
       if: runner.os == 'Linux' && runner.arch == 'X64' && matrix.environment == 'GH'
+      shell: bash
       run: |
-        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger --name-match=kvm
+        # Make /dev/kvm accessible to the unprivileged runner user.
+        # On GitHub-hosted runners the device node is managed by udev, so install
+        # a rule and re-trigger it. Containerised runners (e.g. `act`) have no
+        # udev daemon, in which case fall back to setting the mode directly.
+        if sudo udevadm control --ping > /dev/null 2>&1; then
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+        else
+          echo "udev is not running, setting the mode of /dev/kvm directly"
+          sudo chmod 666 /dev/kvm
+        fi
+        ls -l /dev/kvm
     - name: Install cargo-hyperlight
       shell: bash
       run: just install
@@ -85,6 +103,9 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt, clippy
+          # See the comment in the `run-tests` job. `just fmt` and `just clippy`
+          # pass `-D warnings` explicitly where it is wanted.
+          rustflags: ""
       - uses: extractions/setup-just@v4
       - name: Setup nightly toolchain
         shell: bash
