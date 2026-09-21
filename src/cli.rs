@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::env;
-use std::env::consts::ARCH;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use const_format::formatcp;
 use os_str_bytes::OsStrBytesExt as _;
 
 use crate::cargo_cmd::{CargoCmd as _, cargo_cmd};
@@ -16,7 +14,7 @@ use crate::toolchain;
 pub struct Args {
     pub manifest_path: Option<PathBuf>,
     pub target_dir: PathBuf,
-    pub target: String,
+    pub target: crate::target_info::TargetInfo,
     pub host: String,
     pub with_guest_capi: bool,
     pub c_sysroot_dir: Option<PathBuf>,
@@ -151,28 +149,8 @@ impl Args {
             },
         };
 
-        let target = match value.target {
-            Some(triplet) => triplet,
-            None => match resolve_target(&value.env, &value.current_dir) {
-                Ok(triplet) => triplet,
-                Err(err) => warn.warning(
-                    "could not resolve target triple",
-                    err,
-                    DEFAULT_TARGET.to_string(),
-                )?,
-            },
-        };
-
-        let target = if target.ends_with("-hyperlight-none") {
-            target
-        } else {
-            let (arch, _) = target.split_once('-').unwrap_or((&target, ""));
-            warn.warning(
-                "requested target is not a hyperlight target",
-                anyhow::anyhow!("invalid hyperlight target: {target}"),
-                format!("{arch}-hyperlight-none"),
-            )?
-        };
+        let target =
+            crate::target_info::resolve(warn, value.target, &value.env, &value.current_dir)?;
 
         let target_dir = value.current_dir.join(target_dir);
 
@@ -195,8 +173,6 @@ impl Args {
         })
     }
 }
-
-const DEFAULT_TARGET: &str = const { formatcp!("{ARCH}-hyperlight-none") };
 
 #[derive(Default)]
 //#[command(disable_help_subcommand = true)]
@@ -315,7 +291,10 @@ fn resolve_target_dir(
     Ok(metadata.target_directory)
 }
 
-fn resolve_target(env: &HashMap<OsString, OsString>, cwd: &PathBuf) -> Result<String> {
+pub(crate) fn resolve_target(
+    env: &HashMap<OsString, OsString>,
+    cwd: &PathBuf,
+) -> Result<Option<String>> {
     let output = cargo_cmd(env)?
         .current_dir(cwd)
         .arg("config")
@@ -336,8 +315,8 @@ fn resolve_target(env: &HashMap<OsString, OsString>, cwd: &PathBuf) -> Result<St
     let target = target.trim_matches(|c| c == '"' || c == '\'');
 
     if target.is_empty() {
-        Ok(DEFAULT_TARGET.into())
+        Ok(None)
     } else {
-        Ok(target.into())
+        Ok(Some(target.into()))
     }
 }

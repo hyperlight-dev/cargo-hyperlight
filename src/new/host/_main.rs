@@ -4,7 +4,7 @@ fn main() -> hyperlight_host::Result<()> {
     // Create a sandbox from the guest binary. It starts uninitialized so you
     // can register host functions before the guest begins executing.
     let mut sandbox = UninitializedSandbox::new(
-        GuestBinary::FilePath("../guest/target/{arch}-hyperlight-none/debug/{guest_name}".into()),
+        GuestBinary::FilePath("../guest/target/{guest_target}/debug/{guest_name}".into()),
         None,
     )?;
 

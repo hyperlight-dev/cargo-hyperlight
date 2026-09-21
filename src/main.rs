@@ -42,6 +42,7 @@ enum SpecialCommand {
     New,
     BuildCSysroot,
     Flags(FlagKind),
+    PrintHyperlightTarget,
 }
 impl SpecialCommand {
     fn parse(x: &OsStr) -> Option<Self> {
@@ -51,6 +52,7 @@ impl SpecialCommand {
             "perf" => Some(Perf),
             "new" => Some(New),
             "build-c-sysroot" => Some(BuildCSysroot),
+            "print-hyperlight-target" => Some(PrintHyperlightTarget),
             _ => FlagKind::parse(x).map(Flags),
         }
     }
@@ -95,6 +97,10 @@ impl SpecialCommand {
                 built_args.prepare_sysroot()?;
                 let flags = k.get_flags(&built_args).joined();
                 println!("{}", flags.to_str().ok_or(anyhow!("flags were not UTF-8"))?);
+            }
+            PrintHyperlightTarget => {
+                let built_args = cargo()?.args(args).build_args();
+                println!("{}", built_args.target);
             }
         }
         Ok(())

@@ -4,6 +4,7 @@ mod cargo_cmd;
 mod cli;
 mod command;
 mod sysroot;
+pub mod target_info;
 pub mod toolchain;
 pub mod toolchain_flags;
 

@@ -164,7 +164,7 @@ fn build_wrappers(args: &Args) -> Result<()> {
     let includes_toks = path_to_tokens(args.includes_dir().strip_prefix(args.sysroot_dir())?);
     let c_libs_toks = path_to_tokens(args.c_libs_dir().strip_prefix(args.sysroot_dir())?);
     let wrapper_toks = path_to_tokens(args.wrapper_dir().strip_prefix(args.sysroot_dir())?);
-    let target = &args.target;
+    let target: &str = args.target.as_ref();
     let with_guest_capi = args.with_guest_capi;
     std::fs::write(
         wrapper_src_src_dir.join("args.rs"),
@@ -259,7 +259,7 @@ pub fn prepare(args: &Args) -> Result<()> {
         "third_party/picolibc/libc/stdio",
         "include",
     ];
-    if !args.target.starts_with("aarch64") {
+    if args.target.is_x86_64() {
         include_dirs.push("third_party/musl/arch/x86_64");
     }
 
@@ -289,7 +289,7 @@ impl From<&Args> for toolchain_flags::Args {
             includes_dir: args.includes_dir(),
             c_libs_dir: args.c_libs_dir(),
             wrapper_dir: args.wrapper_dir(),
-            target: args.target.clone(),
+            target: args.target.to_string(),
             with_guest_capi: args.with_guest_capi,
         }
     }

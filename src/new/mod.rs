@@ -6,7 +6,6 @@ use anyhow::{Context, Result, ensure};
 use clap::Parser;
 
 const HYPERLIGHT_VERSION: &str = "0.16";
-const GUEST_ARCH: &str = std::env::consts::ARCH;
 
 const GUEST_CARGO_TOML: &str = include_str!("guest/_Cargo.toml");
 const GUEST_MAIN_RS: &str = include_str!("guest/_main.rs");
@@ -102,7 +101,10 @@ fn write_host(dir: &Path, name: &str, guest_name: &str) -> Result<()> {
     let main_rs = HOST_MAIN_RS
         .replace("{name}", name)
         .replace("{guest_name}", guest_name)
-        .replace("{arch}", GUEST_ARCH);
+        .replace(
+            "{guest_target}",
+            cargo_hyperlight::target_info::default().as_ref(),
+        );
     write_file(dir.join("Cargo.toml"), &cargo_toml)?;
     write_file(dir.join("src/main.rs"), &main_rs)?;
     Ok(())
