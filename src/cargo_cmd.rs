@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 
 pub trait CargoCmd {
     fn manifest_path(&mut self, path: &Option<impl AsRef<Path>>) -> &mut Self;
@@ -54,8 +54,104 @@ pub fn find_cargo() -> Result<CargoBinary> {
     })
 }
 
-pub fn cargo_cmd() -> Result<Command> {
-    Ok(find_cargo()?.command())
+pub fn cargo_cmd(env: &HashMap<OsString, OsString>) -> Result<Command> {
+    let cargo = match env.get(OsStr::new("CARGO")) {
+        Some(cargo) => PathBuf::from(cargo),
+        None => find_cargo()?.path,
+    };
+    let mut cmd = Command::new(cargo);
+    cmd.env_clear().envs(env);
+    Ok(cmd)
+}
+
+#[derive(Clone)]
+pub(crate) struct GuestToolchain {
+    pub cargo: PathBuf,
+    rustc: PathBuf,
+    rustdoc: PathBuf,
+    channel: String,
+}
+
+impl GuestToolchain {
+    pub fn from_file(path: &Path) -> Result<Self> {
+        let contents = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read toolchain file {}", path.display()))?;
+        let channel = parse_toolchain(&contents)
+            .with_context(|| format!("Invalid toolchain file {}", path.display()))?;
+        let rustup = which::which("rustup").context("Toolchain selection requires rustup")?;
+        let binary = |name: &str| -> Result<PathBuf> {
+            let output = Command::new(&rustup)
+                .env("RUSTUP_AUTO_INSTALL", "0")
+                .env("RUSTUP_TOOLCHAIN", &channel)
+                .args(["which", "--toolchain", &channel, name])
+                .checked_output()
+                .with_context(|| {
+                    format!("Toolchain {channel:?} must already be installed with {name}")
+                })?;
+            let path = PathBuf::from(String::from_utf8(output.stdout)?.trim());
+            ensure!(
+                path.is_file(),
+                "Missing {name} executable: {}",
+                path.display()
+            );
+            Ok(path)
+        };
+        Ok(Self {
+            cargo: binary("cargo")?,
+            rustc: binary("rustc")?,
+            rustdoc: binary("rustdoc")?,
+            channel,
+        })
+    }
+
+    pub fn apply_env(&self, env: &mut HashMap<OsString, OsString>) {
+        for (key, value) in [
+            ("CARGO", self.cargo.as_os_str()),
+            ("RUSTC", self.rustc.as_os_str()),
+            ("RUSTDOC", self.rustdoc.as_os_str()),
+            ("RUSTUP_TOOLCHAIN", OsStr::new(&self.channel)),
+            ("RUSTUP_AUTO_INSTALL", OsStr::new("0")),
+        ] {
+            // Windows environment names are case-insensitive.
+            env.retain(|k, _| {
+                if cfg!(windows) {
+                    !k.eq_ignore_ascii_case(OsStr::new(key))
+                } else {
+                    k != key
+                }
+            });
+            env.insert(key.into(), value.into());
+        }
+    }
+}
+
+fn parse_toolchain(contents: &str) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct File {
+        toolchain: Toolchain,
+    }
+    #[derive(serde::Deserialize)]
+    struct Toolchain {
+        channel: String,
+        path: Option<PathBuf>,
+        #[serde(rename = "components")]
+        _components: Option<Vec<String>>,
+        #[serde(rename = "targets")]
+        _targets: Option<Vec<String>>,
+        #[serde(rename = "profile")]
+        _profile: Option<String>,
+    }
+    let file: File = toml::from_str(contents).context("Expected [toolchain] with a channel")?;
+    ensure!(
+        file.toolchain.path.is_none(),
+        "Path toolchains are not supported"
+    );
+    let channel = file.toolchain.channel;
+    ensure!(
+        !channel.is_empty() && channel.trim() == channel && !channel.starts_with('-'),
+        "Toolchain channel must be a nonempty rustup toolchain name"
+    );
+    Ok(channel)
 }
 
 pub struct CheckedOutput {
@@ -268,4 +364,81 @@ pub fn merge_env(
     }
 
     base
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_toolchain_channel() {
+        assert_eq!(
+            parse_toolchain(
+                "# guest compiler\n[toolchain]\nchannel = '1.94.1'\n\
+                 components = ['rust-src']\nprofile = 'minimal'\n"
+            )
+            .unwrap(),
+            "1.94.1"
+        );
+    }
+
+    #[test]
+    fn reject_invalid_toolchain_files() {
+        for contents in [
+            "",
+            "1.94.1",
+            "[toolchain",
+            "[toolchain]\ncomponents = ['rust-src']",
+            "[toolchain]\nchannel = 1941",
+            "[toolchain]\nchannel = ''",
+            "[toolchain]\nchannel = ' 1.94.1 '",
+            "[toolchain]\nchannel = '--help'",
+            "[toolchain]\nchannel = '1.94.1'\npath = '/tmp/toolchain'",
+            "[toolchain]\nchannel = '1.94.1'\ncomponents = 123",
+        ] {
+            assert!(parse_toolchain(contents).is_err(), "{contents}");
+        }
+    }
+
+    #[test]
+    fn effective_cargo_overrides_process_cargo() {
+        let env = HashMap::from([
+            ("CARGO".into(), "guest-cargo".into()),
+            ("RUSTC".into(), "guest-rustc".into()),
+            ("RUSTUP_TOOLCHAIN".into(), "guest".into()),
+        ]);
+        let command = cargo_cmd(&env).unwrap();
+        assert_eq!(command.get_program(), "guest-cargo");
+        assert_eq!(
+            merge_env(std::iter::empty::<(&str, &str)>(), command.get_envs()),
+            env
+        );
+    }
+
+    #[test]
+    fn selected_toolchain_replaces_host_environment() {
+        let toolchain = GuestToolchain {
+            cargo: "guest-cargo".into(),
+            rustc: "guest-rustc".into(),
+            rustdoc: "guest-rustdoc".into(),
+            channel: "1.94.1".into(),
+        };
+        let mut env = HashMap::from([
+            ("CARGO".into(), "host-cargo".into()),
+            ("RUSTC".into(), "host-rustc".into()),
+            ("RUSTDOC".into(), "host-rustdoc".into()),
+            ("RUSTUP_TOOLCHAIN".into(), "host".into()),
+        ]);
+        toolchain.apply_env(&mut env);
+        assert_eq!(
+            env,
+            HashMap::from([
+                ("CARGO".into(), "guest-cargo".into()),
+                ("RUSTC".into(), "guest-rustc".into()),
+                ("RUSTDOC".into(), "guest-rustdoc".into()),
+                ("RUSTUP_TOOLCHAIN".into(), "1.94.1".into()),
+                ("RUSTUP_AUTO_INSTALL".into(), "0".into()),
+            ])
+        );
+    }
 }

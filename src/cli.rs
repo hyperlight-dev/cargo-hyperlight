@@ -300,9 +300,7 @@ fn resolve_target_dir(
     env: &HashMap<OsString, OsString>,
     cwd: &PathBuf,
 ) -> Result<PathBuf> {
-    let output = cargo_cmd()?
-        .env_clear()
-        .envs(env.iter())
+    let output = cargo_cmd(env)?
         .current_dir(cwd)
         .arg("metadata")
         .manifest_path(manifest_path)
@@ -318,9 +316,7 @@ fn resolve_target_dir(
 }
 
 fn resolve_target(env: &HashMap<OsString, OsString>, cwd: &PathBuf) -> Result<String> {
-    let output = cargo_cmd()?
-        .env_clear()
-        .envs(env.iter())
+    let output = cargo_cmd(env)?
         .current_dir(cwd)
         .arg("config")
         .arg("get")
