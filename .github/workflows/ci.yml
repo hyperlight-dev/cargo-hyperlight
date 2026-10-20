@@ -37,7 +37,7 @@ jobs:
         || format('["{0}"]', matrix.os) ) }}
     steps:
     - uses: actions/checkout@v7
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - uses: actions-rust-lang/setup-rust-toolchain@v2
       with:
         # Don't let the action put `-D warnings` in RUSTFLAGS. cargo-hyperlight
         # builds third-party crates (e.g. hyperlight-guest-capi and its
@@ -106,7 +106,7 @@ jobs:
       - uses: actions/checkout@v7
       # Builds cargo-hyperlight itself, so it uses the pinned toolchain from
       # rust-toolchain.toml rather than the one under test.
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           # See the comment in the `run-tests` job.
           rustflags: ""
@@ -162,7 +162,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           components: rustfmt, clippy
           # See the comment in the `run-tests` job. `just fmt` and `just clippy`
