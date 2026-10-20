@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use os_str_bytes::OsStrBytesExt;
 
 use crate::CargoCommandExt;
-use crate::cargo_cmd::{CargoBinary, CargoCmd as _, find_cargo, merge_env};
+use crate::cargo_cmd::{CargoBinary, CargoCmd as _, GuestToolchain, find_cargo, merge_env};
 use crate::cli::{Args, Warning};
 
 /// A process builder for cargo commands, providing a similar API to `std::process::Command`.
@@ -50,6 +50,7 @@ use crate::cli::{Args, Warning};
 #[derive(Clone)]
 pub struct Command {
     cargo: CargoBinary,
+    toolchain: Option<GuestToolchain>,
     /// Arguments to pass to the cargo program
     args: Vec<OsString>,
     /// Environment variable mappings to set for the child process
@@ -123,12 +124,57 @@ impl Command {
         let cargo = find_cargo()?;
         Ok(Self {
             cargo,
+            toolchain: None,
             args: Vec::new(),
             envs: BTreeMap::new(),
             inherit_envs: true,
             inherit_cargo_envs: true,
             current_dir: None,
         })
+    }
+
+    /// Selects the installed Rust toolchain named in a `rust-toolchain.toml` file.
+    ///
+    /// Relative paths resolve against the process's current directory when this
+    /// method is called, not the directory set by [`Self::current_dir`]. The file
+    /// is read immediately and must contain `[toolchain]` with a `channel`.
+    /// Path-based toolchains are not supported.
+    ///
+    /// Both Cargo and rustc are selected for all preparation and guest commands,
+    /// overriding inherited or explicit `CARGO`, `RUSTC`, `RUSTDOC`, and
+    /// `RUSTUP_TOOLCHAIN` values, even after [`Self::env_clear`].
+    /// No process-global environment is changed.
+    /// Rustup's automatic installation is disabled for the selected command.
+    ///
+    /// Selection does not install toolchains or components. Install the toolchain
+    /// and its `rust-src` component separately before calling [`Self::status`].
+    /// Other file settings such as `components`, `targets`, and `profile` do not
+    /// trigger installation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unreadable or invalid file, missing rustup, or
+    /// unavailable Cargo, rustc, or rustdoc. A failed selection leaves the
+    /// previous configuration unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn build() -> anyhow::Result<()> {
+    /// cargo_hyperlight::cargo()?
+    ///     .toolchain_file("guest/rust-toolchain.toml")?
+    ///     .env_clear_cargo()
+    ///     .current_dir("guest")
+    ///     .arg("build")
+    ///     .status()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn toolchain_file(&mut self, path: impl AsRef<Path>) -> Result<&mut Self> {
+        let toolchain = GuestToolchain::from_file(path.as_ref())?;
+        self.cargo.path = toolchain.cargo.clone();
+        self.toolchain = Some(toolchain);
+        Ok(self)
     }
 
     /// Adds an argument to pass to the cargo program.
@@ -523,11 +569,16 @@ impl Command {
     }
 
     fn resolve_env(&self) -> HashMap<OsString, OsString> {
-        merge_env(self.base_env(), self.get_envs())
+        let mut env = merge_env(self.base_env(), self.get_envs());
+        env.insert("CARGO".into(), self.get_program().to_owned());
+        if let Some(toolchain) = &self.toolchain {
+            toolchain.apply_env(&mut env);
+        }
+        env
     }
 
     fn command(&self) -> StdCommand {
-        let mut command = self.cargo.command();
+        let mut command = StdCommand::new(self.get_program());
         // Filter out --target and --target-dir from forwarded args since
         // populate_from_args sets them via env vars with the resolved values
         let args: Vec<_> = self.get_args().map(|a| a.to_owned()).collect();
@@ -579,10 +630,18 @@ impl Command {
                 None => command.env_remove(k),
             };
         }
+        if let Some(toolchain) = &self.toolchain {
+            command.envs(toolchain.env_overrides());
+        }
         command
     }
 
     /// Returns the path to the cargo program that will be executed.
+    ///
+    /// Explicit toolchain selection takes precedence over a `CARGO` environment
+    /// override. Otherwise an explicit `CARGO` value selects the executable for
+    /// preparation and the final command; clearing or removing it restores the
+    /// executable captured when the builder was created.
     ///
     /// # Examples
     ///
@@ -593,6 +652,11 @@ impl Command {
     /// println!("Program: {:?}", command.get_program());
     /// ```
     pub fn get_program(&self) -> &OsStr {
+        if self.toolchain.is_none()
+            && let Some(Some(cargo)) = self.envs.get(OsStr::new("CARGO"))
+        {
+            return cargo;
+        }
         self.cargo.path.as_os_str()
     }
 
@@ -655,7 +719,7 @@ impl Command {
     pub fn status(&self) -> anyhow::Result<()> {
         let mut args = self.build_args();
 
-        args.prepare_sysroot()
+        args.prepare_sysroot_with_install(self.toolchain.is_none())
             .context("Failed to prepare sysroot")?;
 
         self.command()
@@ -693,4 +757,111 @@ fn should_preserve_cargo_env(key: &OsStr) -> bool {
         || key.starts_with("CARGO_NET_")
         || key.starts_with("CARGO_ALIAS_")
         || key.starts_with("CARGO_TERM_")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cargo_override_is_used_for_preparation_and_final_command() {
+        let mut command = Command::new().unwrap();
+        let captured = command.get_program().to_owned();
+        command.env("CARGO", "other-cargo");
+        let prepared = crate::cargo_cmd::cargo_cmd(&command.resolve_env()).unwrap();
+        assert_eq!(prepared.get_program(), "other-cargo");
+        assert_eq!(command.command().get_program(), prepared.get_program());
+        assert_eq!(command.get_program(), prepared.get_program());
+
+        command.env_remove("CARGO");
+        let prepared = crate::cargo_cmd::cargo_cmd(&command.resolve_env()).unwrap();
+        assert_eq!(prepared.get_program(), captured);
+        assert_eq!(command.command().get_program(), captured);
+        command.env("CARGO", "other-cargo").env_clear();
+        assert_eq!(command.command().get_program(), captured);
+        assert_eq!(
+            crate::cargo_cmd::cargo_cmd(&command.resolve_env())
+                .unwrap()
+                .get_program(),
+            captured
+        );
+    }
+
+    #[test]
+    fn selected_toolchain_does_not_print_inherited_credentials() {
+        const KEY: &str = "CARGO_REGISTRIES_HYPERLIGHT_TEST_TOKEN";
+        const VALUE: &str = "dummy-inherited-credential-for-regression";
+        if env::var_os(KEY).is_none() {
+            let output = StdCommand::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "command::tests::selected_toolchain_does_not_print_inherited_credentials",
+                ])
+                .env(KEY, VALUE)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("rust-toolchain.toml");
+        let channel = env::var("RUSTUP_TOOLCHAIN").unwrap();
+        std::fs::write(&file, format!("[toolchain]\nchannel = {channel:?}")).unwrap();
+        let mut command = Command::new().unwrap();
+        command
+            .toolchain_file(file)
+            .unwrap()
+            .env("CARGO", "unavailable-host-cargo")
+            .env("RUSTC", "unavailable-host-rustc")
+            .env("VISIBLE_TEST_SETTING", "visible")
+            .env_remove("REMOVED_TEST_SETTING")
+            .arg("--target")
+            .arg("x86_64-hyperlight-none")
+            .arg("--target-dir")
+            .arg(dir.path());
+
+        let program = command.get_program().to_owned();
+        assert_ne!(program, "unavailable-host-cargo");
+        for clear_cargo in [false, true] {
+            if clear_cargo {
+                command.env_clear_cargo();
+            }
+            assert_eq!(command.resolve_env().get(OsStr::new(KEY)).unwrap(), VALUE);
+            let child = command.command();
+            assert_eq!(child.get_program(), program);
+            assert!(!child.get_envs().any(|(key, _)| key == KEY));
+            assert!(
+                child
+                    .get_envs()
+                    .any(|(key, value)| key == "VISIBLE_TEST_SETTING"
+                        && value == Some(OsStr::new("visible")))
+            );
+            assert!(
+                child
+                    .get_envs()
+                    .any(|(key, value)| key == "REMOVED_TEST_SETTING" && value.is_none())
+            );
+            let debug = format!("{command:?}");
+            assert!(!debug.contains(KEY));
+            assert!(!debug.contains(VALUE));
+            let error = command
+                .command()
+                .arg("--invalid-cargo-hyperlight-test-flag")
+                .checked_output()
+                .err()
+                .unwrap();
+            let diagnostic = format!("{error:#}");
+            assert!(!diagnostic.contains(KEY));
+            assert!(!diagnostic.contains(VALUE));
+        }
+        command.env_clear();
+        assert!(!command.resolve_env().contains_key(OsStr::new(KEY)));
+        assert_eq!(command.command().get_program(), program);
+        assert!(!command.command().get_envs().any(|(key, _)| key == KEY));
+    }
 }
