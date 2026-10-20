@@ -32,16 +32,6 @@ pub struct CargoBinary {
     pub rustup_toolchain: Option<OsString>,
 }
 
-impl CargoBinary {
-    pub fn command(&self) -> Command {
-        let mut cmd = Command::new(&self.path);
-        if let Some(rustup_toolchain) = &self.rustup_toolchain {
-            cmd.env("RUSTUP_TOOLCHAIN", rustup_toolchain);
-        }
-        cmd
-    }
-}
-
 pub fn find_cargo() -> Result<CargoBinary> {
     let cargo = match env::var_os("CARGO") {
         Some(cargo) => PathBuf::from(cargo),
@@ -104,14 +94,18 @@ impl GuestToolchain {
         })
     }
 
-    pub fn apply_env(&self, env: &mut HashMap<OsString, OsString>) {
-        for (key, value) in [
+    pub fn env_overrides(&self) -> [(&str, &OsStr); 5] {
+        [
             ("CARGO", self.cargo.as_os_str()),
             ("RUSTC", self.rustc.as_os_str()),
             ("RUSTDOC", self.rustdoc.as_os_str()),
             ("RUSTUP_TOOLCHAIN", OsStr::new(&self.channel)),
             ("RUSTUP_AUTO_INSTALL", OsStr::new("0")),
-        ] {
+        ]
+    }
+
+    pub fn apply_env(&self, env: &mut HashMap<OsString, OsString>) {
+        for (key, value) in self.env_overrides() {
             // Windows environment names are case-insensitive.
             env.retain(|k, _| {
                 if cfg!(windows) {
