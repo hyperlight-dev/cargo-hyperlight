@@ -87,6 +87,51 @@ Your binary will be built for the `x86_64-hyperlight-none` target (or `aarch64-h
 
 There's no need for any extra configuration, the command will take care of everything.
 
+## Selecting a guest toolchain from Rust
+
+When calling cargo-hyperlight as a library (for example from a host `build.rs`),
+select the guest's installed toolchain explicitly:
+
+```rust,no_run
+fn main() -> anyhow::Result<()> {
+    cargo_hyperlight::cargo()?
+        .toolchain_file("guest/rust-toolchain.toml")?
+        .env_clear_cargo()
+        .current_dir("guest")
+        .arg("build")
+        .status()
+}
+```
+
+For example, a newer host compiler can build a guest pinned to Rust 1.94.1:
+
+```toml
+[toolchain]
+channel = "1.94.1"
+components = ["rust-src"]
+```
+
+Install the toolchain and `rust-src` separately before building:
+
+```sh
+rustup toolchain install 1.94.1 --profile minimal --component rust-src
+```
+
+`toolchain_file` reads the TOML file immediately and returns an error if it is
+invalid, unreadable, or names an unavailable toolchain. Relative file paths resolve
+against the calling process's current directory, independently of `current_dir`.
+The selection overrides `CARGO`, `RUSTC`, `RUSTDOC`, and `RUSTUP_TOOLCHAIN` for
+preparation and the final guest command, including after environment clearing.
+It does not change the parent process environment or install anything. The file's
+`components`, `targets`, and `profile` settings do not trigger downloads; missing
+`rust-src` is reported as an error. Path-based toolchains are not supported.
+
+Without explicit selection, existing toolchain discovery and automatic `rust-src`
+installation are unchanged. Merely setting the guest working directory is not
+enough in a host build script: Cargo normally supplies its own absolute executable
+path. Stable Rust 1.95 and newer reject the custom target specifications used by
+Hyperlight, so use Rust 1.94.x or a supported nightly for the guest.
+
 ## Building C Guests
 
 cargo-hyperlight also supports building C guest binaries. To get the compiler and linker flags needed to build a C guest, use:

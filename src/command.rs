@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use os_str_bytes::OsStrBytesExt;
 
 use crate::CargoCommandExt;
-use crate::cargo_cmd::{CargoBinary, CargoCmd as _, find_cargo, merge_env};
+use crate::cargo_cmd::{CargoBinary, CargoCmd as _, GuestToolchain, find_cargo, merge_env};
 use crate::cli::{Args, Warning};
 
 /// A process builder for cargo commands, providing a similar API to `std::process::Command`.
@@ -50,6 +50,7 @@ use crate::cli::{Args, Warning};
 #[derive(Clone)]
 pub struct Command {
     cargo: CargoBinary,
+    toolchain: Option<GuestToolchain>,
     /// Arguments to pass to the cargo program
     args: Vec<OsString>,
     /// Environment variable mappings to set for the child process
@@ -123,12 +124,57 @@ impl Command {
         let cargo = find_cargo()?;
         Ok(Self {
             cargo,
+            toolchain: None,
             args: Vec::new(),
             envs: BTreeMap::new(),
             inherit_envs: true,
             inherit_cargo_envs: true,
             current_dir: None,
         })
+    }
+
+    /// Selects the installed Rust toolchain named in a `rust-toolchain.toml` file.
+    ///
+    /// Relative paths resolve against the process's current directory when this
+    /// method is called, not the directory set by [`Self::current_dir`]. The file
+    /// is read immediately and must contain `[toolchain]` with a `channel`.
+    /// Path-based toolchains are not supported.
+    ///
+    /// Both Cargo and rustc are selected for all preparation and guest commands,
+    /// overriding inherited or explicit `CARGO`, `RUSTC`, `RUSTDOC`, and
+    /// `RUSTUP_TOOLCHAIN` values, even after [`Self::env_clear`].
+    /// No process-global environment is changed.
+    /// Rustup's automatic installation is disabled for the selected command.
+    ///
+    /// Selection does not install toolchains or components. Install the toolchain
+    /// and its `rust-src` component separately before calling [`Self::status`].
+    /// Other file settings such as `components`, `targets`, and `profile` do not
+    /// trigger installation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unreadable or invalid file, missing rustup, or
+    /// unavailable Cargo, rustc, or rustdoc. A failed selection leaves the
+    /// previous configuration unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn build() -> anyhow::Result<()> {
+    /// cargo_hyperlight::cargo()?
+    ///     .toolchain_file("guest/rust-toolchain.toml")?
+    ///     .env_clear_cargo()
+    ///     .current_dir("guest")
+    ///     .arg("build")
+    ///     .status()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn toolchain_file(&mut self, path: impl AsRef<Path>) -> Result<&mut Self> {
+        let toolchain = GuestToolchain::from_file(path.as_ref())?;
+        self.cargo.path = toolchain.cargo.clone();
+        self.toolchain = Some(toolchain);
+        Ok(self)
     }
 
     /// Adds an argument to pass to the cargo program.
@@ -523,7 +569,11 @@ impl Command {
     }
 
     fn resolve_env(&self) -> HashMap<OsString, OsString> {
-        merge_env(self.base_env(), self.get_envs())
+        let mut env = merge_env(self.base_env(), self.get_envs());
+        if let Some(toolchain) = &self.toolchain {
+            toolchain.apply_env(&mut env);
+        }
+        env
     }
 
     fn command(&self) -> StdCommand {
@@ -578,6 +628,9 @@ impl Command {
                 Some(v) => command.env(k, v),
                 None => command.env_remove(k),
             };
+        }
+        if self.toolchain.is_some() {
+            command.env_clear().envs(self.resolve_env());
         }
         command
     }
@@ -655,7 +708,7 @@ impl Command {
     pub fn status(&self) -> anyhow::Result<()> {
         let mut args = self.build_args();
 
-        args.prepare_sysroot()
+        args.prepare_sysroot_with_install(self.toolchain.is_none())
             .context("Failed to prepare sysroot")?;
 
         self.command()

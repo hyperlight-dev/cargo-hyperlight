@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 use std::ops::Not as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -19,9 +19,7 @@ pub(crate) const UNSTABLE_TARGET_SPEC_FLAG: &str = "-Zunstable-options";
 
 /// Queries the version of the cargo release in use.
 fn cargo_version(args: &Args) -> Result<semver::Version> {
-    let output = cargo_cmd()?
-        .env_clear()
-        .envs(args.env.iter())
+    let output = cargo_cmd(&args.env)?
         .current_dir(&args.current_dir)
         .arg("version")
         .arg("--verbose")
@@ -121,7 +119,7 @@ pub(crate) struct CargoBuildMessage {
     pub(crate) filenames: Vec<PathBuf>,
 }
 
-pub fn build(args: &mut Args) -> Result<()> {
+pub fn build(args: &mut Args, install_rust_src: bool) -> Result<()> {
     let cargo_version = cargo_version(args)?;
 
     let target_spec = match args.target.as_str() {
@@ -195,8 +193,11 @@ Supported values are:
     std::fs::write(crate_dir.join("lib.rs"), LIB_RS).context("Failed to write lib.rs")?;
 
     // if we are using rustup, ensure that the rust-src component is installed
-    if let Some(rustup_toolchain) = std::env::var_os("RUSTUP_TOOLCHAIN") {
+    if install_rust_src && let Some(rustup_toolchain) = args.env.get(OsStr::new("RUSTUP_TOOLCHAIN"))
+    {
         std::process::Command::new("rustup")
+            .env_clear()
+            .envs(&args.env)
             .arg("--quiet")
             .arg("component")
             .arg("add")
@@ -206,11 +207,27 @@ Supported values are:
             .checked_output()
             .context("Failed to get Rust's std lib sources")?;
     }
+    if !install_rust_src {
+        let rustc = args
+            .env
+            .get(OsStr::new("RUSTC"))
+            .context("Missing selected rustc")?;
+        let output = std::process::Command::new(rustc)
+            .env_clear()
+            .envs(&args.env)
+            .arg("--print=sysroot")
+            .checked_output()?;
+        let sysroot = PathBuf::from(String::from_utf8(output.stdout)?.trim());
+        require_rust_src(
+            &sysroot,
+            args.env
+                .get(OsStr::new("RUSTUP_TOOLCHAIN"))
+                .context("Missing selected toolchain")?,
+        )?;
+    }
 
     // Build the sysroot
-    let output = cargo_cmd()?
-        .env_clear()
-        .envs(args.env.iter())
+    let output = cargo_cmd(&args.env)?
         .current_dir(&args.current_dir)
         .arg("build")
         .target(&args.target)
@@ -287,9 +304,7 @@ Supported values are:
 }
 
 fn get_spec(args: &Args, triplet: impl AsRef<str>) -> Result<Map<String, Value>> {
-    let output = cargo_cmd()?
-        .env_clear()
-        .envs(args.env.iter())
+    let output = cargo_cmd(&args.env)?
         .current_dir(&args.current_dir)
         .arg("rustc")
         .arg("--target")
@@ -305,4 +320,37 @@ fn get_spec(args: &Args, triplet: impl AsRef<str>) -> Result<Map<String, Value>>
         .context("Failed to get base target spec")?;
 
     serde_json::from_slice(&output.stdout).context("Failed to parse target spec JSON")
+}
+
+fn require_rust_src(sysroot: &Path, toolchain: &OsStr) -> Result<()> {
+    ensure!(
+        sysroot
+            .join("lib/rustlib/src/rust/library/Cargo.toml")
+            .is_file(),
+        "Selected toolchain is missing rust-src; install it separately with \
+         `rustup component add rust-src --toolchain {}`",
+        toolchain.to_string_lossy()
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_toolchain_requires_preinstalled_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = require_rust_src(dir.path(), OsStr::new("1.94.1")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("rustup component add rust-src --toolchain 1.94.1")
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        let sources = dir.path().join("lib/rustlib/src/rust/library");
+        std::fs::create_dir_all(&sources).unwrap();
+        std::fs::write(sources.join("Cargo.toml"), "").unwrap();
+        require_rust_src(dir.path(), OsStr::new("1.94.1")).unwrap();
+    }
 }
