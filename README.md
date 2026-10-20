@@ -126,12 +126,6 @@ It does not change the parent process environment or install anything. The file'
 `components`, `targets`, and `profile` settings do not trigger downloads; missing
 `rust-src` is reported as an error. Path-based toolchains are not supported.
 
-Without explicit selection, existing toolchain discovery and automatic `rust-src`
-installation are unchanged. Merely setting the guest working directory is not
-enough in a host build script: Cargo normally supplies its own absolute executable
-path. Stable Rust 1.95 and newer reject the custom target specifications used by
-Hyperlight, so use Rust 1.94.x or a supported nightly for the guest.
-
 ## Building C Guests
 
 cargo-hyperlight also supports building C guest binaries. To get the compiler and linker flags needed to build a C guest, use:
