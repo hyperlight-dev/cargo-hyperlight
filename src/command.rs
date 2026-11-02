@@ -9,7 +9,10 @@ use anyhow::{Context, Result};
 use os_str_bytes::OsStrBytesExt;
 
 use crate::CargoCommandExt;
-use crate::cargo_cmd::{CargoBinary, CargoCmd as _, GuestToolchain, find_cargo, merge_env};
+use crate::cargo_cmd::{
+    CargoBinary, CargoCmd as _, GuestToolchain, env_keys_equal, find_cargo, get_env_value,
+    merge_env,
+};
 use crate::cli::{Args, Warning};
 
 /// A process builder for cargo commands, providing a similar API to `std::process::Command`.
@@ -133,29 +136,33 @@ impl Command {
         })
     }
 
-    /// Selects the installed Rust toolchain named in a `rust-toolchain.toml` file.
+    /// Selects the Rust toolchain named in a `rust-toolchain.toml` file.
     ///
     /// Relative paths resolve against the process's current directory when this
     /// method is called, not the directory set by [`Self::current_dir`]. The file
     /// is read immediately and must contain `[toolchain]` with a `channel`.
-    /// Path-based toolchains are not supported.
+    /// Selecting a local compiler directory with `[toolchain].path` is not supported.
     ///
     /// Both Cargo and rustc are selected for all preparation and guest commands,
     /// overriding inherited or explicit `CARGO`, `RUSTC`, `RUSTDOC`, and
     /// `RUSTUP_TOOLCHAIN` values, even after [`Self::env_clear`].
     /// No process-global environment is changed.
-    /// Rustup's automatic installation is disabled for the selected command.
-    ///
-    /// Selection does not install toolchains or components. Install the toolchain
-    /// and its `rust-src` component separately before calling [`Self::status`].
-    /// Other file settings such as `components`, `targets`, and `profile` do not
-    /// trigger installation.
+    /// Rustup installs the selected toolchain using the file's `components`,
+    /// `targets`, and `profile` settings. Sysroot preparation also ensures that
+    /// the `rust-src` component is installed.
+    /// Set `RUSTUP_AUTO_INSTALL=0` in the parent environment or call
+    /// `.env("RUSTUP_AUTO_INSTALL", "0")` before this method to use an installed
+    /// toolchain without provisioning it. Earlier environment overrides and
+    /// removals are honored; changes made after this call cannot undo provisioning.
+    /// Sysroot preparation skips installing `rust-src` when the guest command's
+    /// environment contains `RUSTUP_AUTO_INSTALL=0`. The required components and
+    /// targets must already be installed; missing prerequisites cause an error.
     ///
     /// # Errors
     ///
-    /// Returns an error for an unreadable or invalid file, missing rustup, or
-    /// unavailable Cargo, rustc, or rustdoc. A failed selection leaves the
-    /// previous configuration unchanged.
+    /// Returns an error for an unreadable or invalid file, missing rustup, failed
+    /// installation, or unavailable Cargo, rustc, or rustdoc. A failed selection
+    /// leaves the previous configuration unchanged.
     ///
     /// # Examples
     ///
@@ -171,7 +178,9 @@ impl Command {
     /// # }
     /// ```
     pub fn toolchain_file(&mut self, path: impl AsRef<Path>) -> Result<&mut Self> {
-        let toolchain = GuestToolchain::from_file(path.as_ref())?;
+        let env = self.resolve_env();
+        let auto_install = get_env_value(&env, "RUSTUP_AUTO_INSTALL");
+        let toolchain = GuestToolchain::from_file(path.as_ref(), auto_install)?;
         self.cargo.path = toolchain.cargo.clone();
         self.toolchain = Some(toolchain);
         Ok(self)
@@ -301,8 +310,12 @@ impl Command {
     /// [`env_clear`]: Command::env_clear
     /// [`env_remove`]: Command::env_remove
     pub fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        let key = key.as_ref();
+        if cfg!(windows) {
+            self.envs.retain(|name, _| !env_keys_equal(name, key));
+        }
         self.envs
-            .insert(key.as_ref().to_owned(), Some(value.as_ref().to_owned()));
+            .insert(key.to_owned(), Some(value.as_ref().to_owned()));
         self
     }
 
@@ -410,7 +423,11 @@ impl Command {
     ///     .exec();
     /// ```
     pub fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
-        self.envs.insert(key.as_ref().to_owned(), None);
+        let key = key.as_ref();
+        if cfg!(windows) {
+            self.envs.retain(|name, _| !env_keys_equal(name, key));
+        }
+        self.envs.insert(key.to_owned(), None);
         self
     }
 
@@ -719,7 +736,7 @@ impl Command {
     pub fn status(&self) -> anyhow::Result<()> {
         let mut args = self.build_args();
 
-        args.prepare_sysroot_with_install(self.toolchain.is_none())
+        args.prepare_sysroot()
             .context("Failed to prepare sysroot")?;
 
         self.command()

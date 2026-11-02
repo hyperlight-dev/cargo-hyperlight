@@ -121,12 +121,8 @@ impl CargoCommandExt for std::process::Command {
 
 impl Args {
     pub fn prepare_sysroot(&mut self) -> Result<()> {
-        self.prepare_sysroot_with_install(true)
-    }
-
-    pub(crate) fn prepare_sysroot_with_install(&mut self, install_rust_src: bool) -> Result<()> {
         // Build sysroot
-        sysroot::build(self, install_rust_src)?;
+        sysroot::build(self)?;
 
         // Build toolchain
         toolchain::prepare(self)?;

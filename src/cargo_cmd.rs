@@ -63,21 +63,29 @@ pub(crate) struct GuestToolchain {
 }
 
 impl GuestToolchain {
-    pub fn from_file(path: &Path) -> Result<Self> {
+    pub fn from_file(path: &Path, auto_install: Option<&OsStr>) -> Result<Self> {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read toolchain file {}", path.display()))?;
         let channel = parse_toolchain(&contents)
             .with_context(|| format!("Invalid toolchain file {}", path.display()))?;
         let rustup = which::which("rustup").context("Toolchain selection requires rustup")?;
+        if rustup_auto_install_enabled(auto_install) {
+            channel
+                .install_command(&rustup)
+                .env_remove("RUSTUP_AUTO_INSTALL")
+                .envs(auto_install.map(|value| ("RUSTUP_AUTO_INSTALL", value)))
+                .checked_output()
+                .context("Failed to install guest toolchain and components")?;
+        }
+        let channel = channel.channel;
         let binary = |name: &str| -> Result<PathBuf> {
             let output = Command::new(&rustup)
-                .env("RUSTUP_AUTO_INSTALL", "0")
+                .env_remove("RUSTUP_AUTO_INSTALL")
+                .envs(auto_install.map(|value| ("RUSTUP_AUTO_INSTALL", value)))
                 .env("RUSTUP_TOOLCHAIN", &channel)
                 .args(["which", "--toolchain", &channel, name])
                 .checked_output()
-                .with_context(|| {
-                    format!("Toolchain {channel:?} must already be installed with {name}")
-                })?;
+                .with_context(|| format!("Failed to locate {name} for toolchain {channel:?}"))?;
             let path = PathBuf::from(String::from_utf8(output.stdout)?.trim());
             ensure!(
                 path.is_file(),
@@ -94,13 +102,12 @@ impl GuestToolchain {
         })
     }
 
-    pub fn env_overrides(&self) -> [(&str, &OsStr); 5] {
+    pub fn env_overrides(&self) -> [(&str, &OsStr); 4] {
         [
             ("CARGO", self.cargo.as_os_str()),
             ("RUSTC", self.rustc.as_os_str()),
             ("RUSTDOC", self.rustdoc.as_os_str()),
             ("RUSTUP_TOOLCHAIN", OsStr::new(&self.channel)),
-            ("RUSTUP_AUTO_INSTALL", OsStr::new("0")),
         ]
     }
 
@@ -119,33 +126,54 @@ impl GuestToolchain {
     }
 }
 
-fn parse_toolchain(contents: &str) -> Result<String> {
+pub(crate) fn rustup_auto_install_enabled(value: Option<&OsStr>) -> bool {
+    value != Some(OsStr::new("0"))
+}
+
+#[derive(serde::Deserialize)]
+struct Toolchain {
+    channel: String,
+    path: Option<PathBuf>,
+    #[serde(default)]
+    components: Vec<String>,
+    #[serde(default)]
+    targets: Vec<String>,
+    profile: Option<String>,
+}
+
+impl Toolchain {
+    fn install_command(&self, rustup: &Path) -> Command {
+        let mut command = Command::new(rustup);
+        command.args(["toolchain", "install", &self.channel]);
+        if let Some(profile) = &self.profile {
+            command.arg("--profile").arg(profile);
+        }
+        for component in &self.components {
+            command.arg("--component").arg(component);
+        }
+        for target in &self.targets {
+            command.arg("--target").arg(target);
+        }
+        command
+    }
+}
+
+fn parse_toolchain(contents: &str) -> Result<Toolchain> {
     #[derive(serde::Deserialize)]
     struct File {
         toolchain: Toolchain,
-    }
-    #[derive(serde::Deserialize)]
-    struct Toolchain {
-        channel: String,
-        path: Option<PathBuf>,
-        #[serde(rename = "components")]
-        _components: Option<Vec<String>>,
-        #[serde(rename = "targets")]
-        _targets: Option<Vec<String>>,
-        #[serde(rename = "profile")]
-        _profile: Option<String>,
     }
     let file: File = toml::from_str(contents).context("Expected [toolchain] with a channel")?;
     ensure!(
         file.toolchain.path.is_none(),
         "Path toolchains are not supported"
     );
-    let channel = file.toolchain.channel;
+    let channel = &file.toolchain.channel;
     ensure!(
         !channel.is_empty() && channel.trim() == channel && !channel.starts_with('-'),
         "Toolchain channel must be a nonempty rustup toolchain name"
     );
-    Ok(channel)
+    Ok(file.toolchain)
 }
 
 pub struct CheckedOutput {
@@ -310,9 +338,30 @@ impl CargoCmd for Command {
     }
 }
 
+pub(crate) fn env_keys_equal(a: &OsStr, b: &OsStr) -> bool {
+    #[cfg(windows)]
+    {
+        return a.eq_ignore_ascii_case(b);
+    }
+
+    #[cfg(not(windows))]
+    {
+        a == b
+    }
+}
+
+pub(crate) fn get_env_value<'a>(
+    env: &'a HashMap<OsString, OsString>,
+    key: &str,
+) -> Option<&'a OsStr> {
+    env.iter().find_map(|(name, value)| {
+        env_keys_equal(name, OsStr::new(key)).then_some(value.as_os_str())
+    })
+}
+
 fn get_env(cmd: &Command, key: &str) -> Option<OsString> {
     let mut envs = cmd.get_envs();
-    match envs.find(|(k, _)| *k == key) {
+    match envs.find(|(k, _)| env_keys_equal(k, OsStr::new(key))) {
         Some((_, v)) => v.map(ToOwned::to_owned),
         None => std::env::var_os(key),
     }
@@ -350,10 +399,16 @@ pub fn merge_env(
         .collect::<HashMap<_, _>>();
 
     for (k, v) in envs {
+        let k = k.as_ref();
         if let Some(v) = v {
-            base.insert(k.as_ref().to_owned(), v.as_ref().to_owned());
+            if cfg!(windows) {
+                base.retain(|name, _| !env_keys_equal(name, k));
+            }
+            base.insert(k.to_owned(), v.as_ref().to_owned());
+        } else if cfg!(windows) {
+            base.retain(|name, _| !env_keys_equal(name, k));
         } else {
-            base.remove(k.as_ref());
+            base.remove(k);
         }
     }
 
@@ -365,14 +420,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn environment_keys_follow_platform_case_rules() {
+        let upper = OsStr::new("RUSTUP_AUTO_INSTALL");
+        let lower = OsStr::new("rustup_auto_install");
+
+        #[cfg(windows)]
+        assert!(env_keys_equal(upper, lower));
+
+        #[cfg(not(windows))]
+        assert!(!env_keys_equal(upper, lower));
+    }
+
+    #[test]
+    fn rustup_auto_install_requires_explicit_opt_out() {
+        assert!(rustup_auto_install_enabled(None));
+        for value in ["1", "", "false"] {
+            assert!(rustup_auto_install_enabled(Some(OsStr::new(value))));
+        }
+        assert!(!rustup_auto_install_enabled(Some(OsStr::new("0"))));
+    }
+
+    #[test]
     fn parse_toolchain_channel() {
         assert_eq!(
             parse_toolchain(
                 "# guest compiler\n[toolchain]\nchannel = '1.94.1'\n\
                  components = ['rust-src']\nprofile = 'minimal'\n"
             )
-            .unwrap(),
+            .unwrap()
+            .channel,
             "1.94.1"
+        );
+    }
+
+    #[test]
+    fn install_honors_toolchain_settings() {
+        let toolchain = parse_toolchain(
+            "[toolchain]\nchannel = '1.94.1'\ncomponents = ['rust-src', 'clippy']\n\
+                 targets = ['x86_64-unknown-none']\nprofile = 'minimal'\n",
+        )
+        .unwrap();
+        let command = toolchain.install_command(Path::new("rustup"));
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "toolchain",
+                "install",
+                "1.94.1",
+                "--profile",
+                "minimal",
+                "--component",
+                "rust-src",
+                "--component",
+                "clippy",
+                "--target",
+                "x86_64-unknown-none",
+            ]
         );
     }
 
@@ -431,7 +535,6 @@ mod tests {
                 ("RUSTC".into(), "guest-rustc".into()),
                 ("RUSTDOC".into(), "guest-rustdoc".into()),
                 ("RUSTUP_TOOLCHAIN".into(), "1.94.1".into()),
-                ("RUSTUP_AUTO_INSTALL".into(), "0".into()),
             ])
         );
     }

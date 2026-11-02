@@ -90,7 +90,7 @@ There's no need for any extra configuration, the command will take care of every
 ## Selecting a guest toolchain from Rust
 
 When calling cargo-hyperlight as a library (for example from a host `build.rs`),
-select the guest's installed toolchain explicitly:
+select the guest's toolchain explicitly:
 
 ```rust,no_run
 fn main() -> anyhow::Result<()> {
@@ -111,20 +111,32 @@ channel = "1.94.1"
 components = ["rust-src"]
 ```
 
-Install the toolchain and `rust-src` separately before building:
-
-```sh
-rustup toolchain install 1.94.1 --profile minimal --component rust-src
-```
-
 `toolchain_file` reads the TOML file immediately and returns an error if it is
-invalid, unreadable, or names an unavailable toolchain. Relative file paths resolve
+invalid, unreadable, or rustup cannot provision the toolchain. Relative file paths resolve
 against the calling process's current directory, independently of `current_dir`.
 The selection overrides `CARGO`, `RUSTC`, `RUSTDOC`, and `RUSTUP_TOOLCHAIN` for
 preparation and the final guest command, including after environment clearing.
-It does not change the parent process environment or install anything. The file's
-`components`, `targets`, and `profile` settings do not trigger downloads; missing
-`rust-src` is reported as an error. Path-based toolchains are not supported.
+Rustup installs the selected toolchain using the file's `components`, `targets`,
+and `profile` settings. Sysroot preparation also installs `rust-src` when needed.
+The parent process environment is unchanged. Select a Rust version using `channel`;
+selecting a local compiler directory using `[toolchain].path` is not supported.
+
+To disable toolchain and component installation, set `RUSTUP_AUTO_INSTALL=0` in
+your shell. Library calls inherit this setting:
+
+```sh
+RUSTUP_AUTO_INSTALL=0 cargo build
+```
+
+For library usage, you can also call `.env("RUSTUP_AUTO_INSTALL", "0")` **before**
+`.toolchain_file(...)`. Explicit settings override the inherited value. The file
+is processed during the `toolchain_file` call, so settings made afterwards cannot
+prevent installation that has already happened.
+
+With installation disabled, the toolchain file still selects the Rust version.
+The requested toolchain, required components (including `rust-src`), and targets
+must already be installed; missing prerequisites cause an error. Sysroot
+preparation uses the same environment setting to decide whether to install `rust-src`.
 
 ## Building C Guests
 

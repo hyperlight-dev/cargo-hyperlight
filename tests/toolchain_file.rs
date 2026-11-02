@@ -24,19 +24,155 @@ fn unavailable_toolchain_does_not_fall_back() {
     let file = dir.path().join("rust-toolchain.toml");
     let mut command = cargo_hyperlight::cargo().unwrap();
     let original = command.get_program().to_owned();
-    for channel in ["cargo-hyperlight-missing-toolchain", "1.94.999"] {
-        std::fs::write(&file, format!("[toolchain]\nchannel = '{channel}'")).unwrap();
-        let error = command.toolchain_file(&file).unwrap_err();
-        let error = format!("{error:#}");
-        assert!(error.contains("must already be installed"), "{error}");
-        assert!(!error.contains("syncing channel updates"), "{error}");
-        assert_eq!(command.get_program(), original);
+    std::fs::write(
+        &file,
+        "[toolchain]\nchannel = 'cargo-hyperlight-missing-toolchain'",
+    )
+    .unwrap();
+    let error = command.toolchain_file(&file).unwrap_err();
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("Failed to install guest toolchain")
+            || error.contains("Failed to locate cargo"),
+        "{error}"
+    );
+    assert_eq!(command.get_program(), original);
+}
+
+#[cfg(unix)]
+#[test]
+fn toolchain_provisioning_honors_auto_install() {
+    use std::os::unix::fs::PermissionsExt;
+
+    const FILE_ENV: &str = "CARGO_HYPERLIGHT_TEST_TOOLCHAIN_FILE";
+    const MISSING_ENV: &str = "CARGO_HYPERLIGHT_TEST_TOOLCHAIN_MISSING";
+    const MODE_ENV: &str = "CARGO_HYPERLIGHT_TEST_ENV_MODE";
+    if let Some(file) = std::env::var_os(FILE_ENV) {
+        let inherited = std::env::var_os("RUSTUP_AUTO_INSTALL");
+        let mut command = cargo_hyperlight::cargo().unwrap();
+        match std::env::var(MODE_ENV).unwrap().as_str() {
+            "inherit" => {}
+            "0" => {
+                command.env("RUSTUP_AUTO_INSTALL", "0");
+            }
+            "1" => {
+                command.env("RUSTUP_AUTO_INSTALL", "1");
+            }
+            "remove" => {
+                command.env_remove("RUSTUP_AUTO_INSTALL");
+            }
+            "clear" => {
+                command.env_clear();
+            }
+            "clear_cargo" => {
+                command.env_clear_cargo();
+            }
+            mode => panic!("Unknown test environment mode: {mode}"),
+        }
+        let original = command.get_program().to_owned();
+        let result = command.toolchain_file(file);
+        if std::env::var_os(MISSING_ENV).as_deref() == Some(std::ffi::OsStr::new("1")) {
+            let error = format!("{:#}", result.unwrap_err());
+            assert!(error.contains("Failed to locate cargo"), "{error}");
+            assert_eq!(command.get_program(), original);
+        } else {
+            result.unwrap();
+            assert_eq!(command.get_program(), std::env::current_exe().unwrap());
+        }
+        assert_eq!(std::env::var_os("RUSTUP_AUTO_INSTALL"), inherited);
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("rust-toolchain.toml");
+    let log = dir.path().join("rustup.log");
+    let rustup = dir.path().join("rustup");
+    std::fs::write(
+        &file,
+        "[toolchain]\nchannel = 'guest-test'\ncomponents = ['rust-src']\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &rustup,
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> "$CARGO_HYPERLIGHT_TEST_RUSTUP_LOG"
+    printf 'auto-install=%s\n' "${RUSTUP_AUTO_INSTALL-unset}" >> "$CARGO_HYPERLIGHT_TEST_RUSTUP_LOG"
+case "$1" in
+    toolchain) exit 0 ;;
+    which)
+        if [ "$CARGO_HYPERLIGHT_TEST_TOOLCHAIN_MISSING" = 1 ]; then
+            exit 1
+        fi
+        printf '%s\n' "$CARGO_HYPERLIGHT_TEST_BINARY"
+        ;;
+    *) exit 1 ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&rustup, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    for (auto_install, mode, effective) in [
+        (None, "inherit", None),
+        (Some("1"), "inherit", Some("1")),
+        (Some("0"), "inherit", Some("0")),
+        (None, "0", Some("0")),
+        (Some("1"), "0", Some("0")),
+        (Some("0"), "1", Some("1")),
+        (Some("0"), "remove", None),
+        (Some("0"), "clear", None),
+        (Some("0"), "clear_cargo", Some("0")),
+    ] {
+        for missing in [false, true] {
+            std::fs::write(&log, "").unwrap();
+            let mut child = Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "toolchain_provisioning_honors_auto_install",
+                    "--nocapture",
+                ])
+                .env("PATH", dir.path())
+                .env("CARGO", env!("CARGO"))
+                .env(FILE_ENV, &file)
+                .env(MISSING_ENV, if missing { "1" } else { "0" })
+                .env(MODE_ENV, mode)
+                .env("CARGO_HYPERLIGHT_TEST_RUSTUP_LOG", &log)
+                .env(
+                    "CARGO_HYPERLIGHT_TEST_BINARY",
+                    std::env::current_exe().unwrap(),
+                )
+                .env_remove("RUSTUP_AUTO_INSTALL");
+            if let Some(value) = auto_install {
+                child.env("RUSTUP_AUTO_INSTALL", value);
+            }
+            let output = child.output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            let calls = std::fs::read_to_string(&log).unwrap();
+            assert_eq!(
+                calls.contains("toolchain install guest-test --component rust-src\n"),
+                effective != Some("0"),
+                "{calls}"
+            );
+            let expected_env = format!("auto-install={}", effective.unwrap_or("unset"));
+            assert!(
+                calls
+                    .lines()
+                    .filter(|line| line.starts_with("auto-install="))
+                    .all(|line| line == expected_env),
+                "{calls}"
+            );
+            assert!(
+                calls.contains("which --toolchain guest-test cargo\n"),
+                "{calls}"
+            );
+        }
     }
 }
 
 /// Run with a newer host: cargo +1.99.1 test --test toolchain_file -- --include-ignored
 #[test]
-#[ignore = "requires a host compiler newer than 1.94, Rust 1.94.1 with rust-src, and guest build dependencies"]
+#[ignore = "requires a host compiler newer than 1.94, rustup downloads, and guest build dependencies"]
 fn newer_host_builds_guest_with_older_toolchain() {
     let host = Command::new(env!("CARGO"))
         .args(["--version"])

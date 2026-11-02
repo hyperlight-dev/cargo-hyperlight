@@ -1,12 +1,12 @@
 use std::ffi::OsStr;
 use std::ops::Not as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Output, Stdio};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Map, Value, json};
 
-use crate::cargo_cmd::{CargoCmd, cargo_cmd};
+use crate::cargo_cmd::{CargoCmd, cargo_cmd, get_env_value, rustup_auto_install_enabled};
 use crate::cli::Args;
 
 const CARGO_TOML: &str = include_str!("dummy/_Cargo.toml");
@@ -16,6 +16,20 @@ const LIB_RS: &str = include_str!("dummy/_lib.rs");
 /// became unstable in Rust 1.95, so newer toolchains only accept them on the
 /// nightly channel and only when this flag is passed.
 pub(crate) const UNSTABLE_TARGET_SPEC_FLAG: &str = "-Zunstable-options";
+
+fn rust_src_install_command(args: &Args) -> Option<std::process::Command> {
+    let toolchain = args.env.get(OsStr::new("RUSTUP_TOOLCHAIN"))?;
+    if !rustup_auto_install_enabled(get_env_value(&args.env, "RUSTUP_AUTO_INSTALL")) {
+        return None;
+    }
+    let mut command = std::process::Command::new("rustup");
+    command
+        .env_clear()
+        .envs(&args.env)
+        .args(["--quiet", "component", "add", "rust-src", "--toolchain"])
+        .arg(toolchain);
+    Some(command)
+}
 
 /// Queries the version of the cargo release in use.
 fn cargo_version(args: &Args) -> Result<semver::Version> {
@@ -119,7 +133,7 @@ pub(crate) struct CargoBuildMessage {
     pub(crate) filenames: Vec<PathBuf>,
 }
 
-pub fn build(args: &mut Args, install_rust_src: bool) -> Result<()> {
+pub fn build(args: &mut Args) -> Result<()> {
     let cargo_version = cargo_version(args)?;
 
     let target_spec = match args.target.as_str() {
@@ -192,38 +206,11 @@ Supported values are:
         .context("Failed to write Cargo.toml")?;
     std::fs::write(crate_dir.join("lib.rs"), LIB_RS).context("Failed to write lib.rs")?;
 
-    // if we are using rustup, ensure that the rust-src component is installed
-    if install_rust_src && let Some(rustup_toolchain) = args.env.get(OsStr::new("RUSTUP_TOOLCHAIN"))
-    {
-        std::process::Command::new("rustup")
-            .env_clear()
-            .envs(&args.env)
-            .arg("--quiet")
-            .arg("component")
-            .arg("add")
-            .arg("rust-src")
-            .arg("--toolchain")
-            .arg(rustup_toolchain)
+    // Install rust-src only when rustup provisioning is enabled.
+    if let Some(mut command) = rust_src_install_command(args) {
+        command
             .checked_output()
             .context("Failed to get Rust's std lib sources")?;
-    }
-    if !install_rust_src {
-        let rustc = args
-            .env
-            .get(OsStr::new("RUSTC"))
-            .context("Missing selected rustc")?;
-        let output = std::process::Command::new(rustc)
-            .env_clear()
-            .envs(&args.env)
-            .arg("--print=sysroot")
-            .checked_output()?;
-        let sysroot = PathBuf::from(String::from_utf8(output.stdout)?.trim());
-        require_rust_src(
-            &sysroot,
-            args.env
-                .get(OsStr::new("RUSTUP_TOOLCHAIN"))
-                .context("Missing selected toolchain")?,
-        )?;
     }
 
     // Build the sysroot
@@ -322,35 +309,41 @@ fn get_spec(args: &Args, triplet: impl AsRef<str>) -> Result<Map<String, Value>>
     serde_json::from_slice(&output.stdout).context("Failed to parse target spec JSON")
 }
 
-fn require_rust_src(sysroot: &Path, toolchain: &OsStr) -> Result<()> {
-    ensure!(
-        sysroot
-            .join("lib/rustlib/src/rust/library/Cargo.toml")
-            .is_file(),
-        "Selected toolchain is missing rust-src; install it separately with \
-         `rustup component add rust-src --toolchain {}`",
-        toolchain.to_string_lossy()
-    );
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn selected_toolchain_requires_preinstalled_sources() {
-        let dir = tempfile::tempdir().unwrap();
-        let error = require_rust_src(dir.path(), OsStr::new("1.94.1")).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("rustup component add rust-src --toolchain 1.94.1")
-        );
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
-        let sources = dir.path().join("lib/rustlib/src/rust/library");
-        std::fs::create_dir_all(&sources).unwrap();
-        std::fs::write(sources.join("Cargo.toml"), "").unwrap();
-        require_rust_src(dir.path(), OsStr::new("1.94.1")).unwrap();
+    fn rust_src_provisioning_uses_guest_environment() {
+        let mut command = crate::cargo().unwrap();
+        command
+            .env_clear()
+            .env("RUSTUP_TOOLCHAIN", "guest-toolchain")
+            .env("RUSTUP_AUTO_INSTALL", "0");
+        assert!(rust_src_install_command(&command.build_args()).is_none());
+
+        for value in [Some("1"), None] {
+            if let Some(value) = value {
+                command.env("RUSTUP_AUTO_INSTALL", value);
+            } else {
+                command.env_remove("RUSTUP_AUTO_INSTALL");
+            }
+            let install = rust_src_install_command(&command.build_args()).unwrap();
+            assert_eq!(install.get_program(), "rustup");
+            assert_eq!(
+                install.get_args().collect::<Vec<_>>(),
+                [
+                    "--quiet",
+                    "component",
+                    "add",
+                    "rust-src",
+                    "--toolchain",
+                    "guest-toolchain"
+                ]
+            );
+        }
+
+        command.env_remove("RUSTUP_TOOLCHAIN");
+        assert!(rust_src_install_command(&command.build_args()).is_none());
     }
 }
