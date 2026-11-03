@@ -341,7 +341,7 @@ impl CargoCmd for Command {
 pub(crate) fn env_keys_equal(a: &OsStr, b: &OsStr) -> bool {
     #[cfg(windows)]
     {
-        return a.eq_ignore_ascii_case(b);
+        a.eq_ignore_ascii_case(b)
     }
 
     #[cfg(not(windows))]
