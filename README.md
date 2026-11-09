@@ -117,7 +117,10 @@ against the calling process's current directory, independently of `current_dir`.
 The selection overrides `CARGO`, `RUSTC`, `RUSTDOC`, and `RUSTUP_TOOLCHAIN` for
 preparation and the final guest command, including after environment clearing.
 Rustup installs the selected toolchain using the file's `components`, `targets`,
-and `profile` settings. Sysroot preparation also installs `rust-src` when needed.
+and `profile` settings without updating installed toolchains or Rustup itself.
+Selection uses the builder's resolved environment, including any `PATH` and
+`RUSTUP_HOME` settings made before `toolchain_file`.
+Sysroot preparation also installs `rust-src` when needed.
 The parent process environment is unchanged. Select a Rust version using `channel`;
 selecting a local compiler directory using `[toolchain].path` is not supported.
 
