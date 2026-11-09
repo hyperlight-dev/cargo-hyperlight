@@ -45,7 +45,7 @@ fn toolchain_provisioning_honors_auto_install() {
     use std::os::unix::fs::PermissionsExt;
 
     const FILE_ENV: &str = "CARGO_HYPERLIGHT_TEST_TOOLCHAIN_FILE";
-    const MISSING_ENV: &str = "CARGO_HYPERLIGHT_TEST_TOOLCHAIN_MISSING";
+    const MISSING_ENV: &str = "HYPERLIGHT_TEST_TOOLCHAIN_MISSING";
     const MODE_ENV: &str = "CARGO_HYPERLIGHT_TEST_ENV_MODE";
     if let Some(file) = std::env::var_os(FILE_ENV) {
         let inherited = std::env::var_os("RUSTUP_AUTO_INSTALL");
@@ -63,6 +63,14 @@ fn toolchain_provisioning_honors_auto_install() {
             }
             "clear" => {
                 command.env_clear();
+                for key in [
+                    "PATH",
+                    "HYPERLIGHT_TEST_RUSTUP_LOG",
+                    "HYPERLIGHT_TEST_BINARY",
+                    MISSING_ENV,
+                ] {
+                    command.env(key, std::env::var_os(key).unwrap());
+                }
             }
             "clear_cargo" => {
                 command.env_clear_cargo();
@@ -95,15 +103,15 @@ fn toolchain_provisioning_honors_auto_install() {
     std::fs::write(
         &rustup,
         r#"#!/bin/sh
-printf '%s\n' "$*" >> "$CARGO_HYPERLIGHT_TEST_RUSTUP_LOG"
-    printf 'auto-install=%s\n' "${RUSTUP_AUTO_INSTALL-unset}" >> "$CARGO_HYPERLIGHT_TEST_RUSTUP_LOG"
+printf '%s\n' "$*" >> "$HYPERLIGHT_TEST_RUSTUP_LOG"
+    printf 'auto-install=%s\n' "${RUSTUP_AUTO_INSTALL-unset}" >> "$HYPERLIGHT_TEST_RUSTUP_LOG"
 case "$1" in
     toolchain) exit 0 ;;
     which)
-        if [ "$CARGO_HYPERLIGHT_TEST_TOOLCHAIN_MISSING" = 1 ]; then
+        if [ "$HYPERLIGHT_TEST_TOOLCHAIN_MISSING" = 1 ]; then
             exit 1
         fi
-        printf '%s\n' "$CARGO_HYPERLIGHT_TEST_BINARY"
+        printf '%s\n' "$HYPERLIGHT_TEST_BINARY"
         ;;
     *) exit 1 ;;
 esac
@@ -137,11 +145,8 @@ esac
                 .env(FILE_ENV, &file)
                 .env(MISSING_ENV, if missing { "1" } else { "0" })
                 .env(MODE_ENV, mode)
-                .env("CARGO_HYPERLIGHT_TEST_RUSTUP_LOG", &log)
-                .env(
-                    "CARGO_HYPERLIGHT_TEST_BINARY",
-                    std::env::current_exe().unwrap(),
-                )
+                .env("HYPERLIGHT_TEST_RUSTUP_LOG", &log)
+                .env("HYPERLIGHT_TEST_BINARY", std::env::current_exe().unwrap())
                 .env_remove("RUSTUP_AUTO_INSTALL");
             if let Some(value) = auto_install {
                 child.env("RUSTUP_AUTO_INSTALL", value);
@@ -150,7 +155,7 @@ esac
             assert!(output.status.success(), "{output:?}");
             let calls = std::fs::read_to_string(&log).unwrap();
             assert_eq!(
-                calls.contains("toolchain install guest-test --component rust-src\n"),
+                calls.contains("toolchain install guest-test --no-update --no-self-update --component rust-src\n"),
                 effective != Some("0"),
                 "{calls}"
             );
@@ -167,6 +172,61 @@ esac
                 "{calls}"
             );
         }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn toolchain_selection_uses_builder_environment() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("rust-toolchain.toml");
+    let log = dir.path().join("rustup.log");
+    let rustup = dir.path().join("rustup");
+    let home = dir.path().join("rustup-home");
+    std::fs::write(&file, "[toolchain]\nchannel = 'guest-test'\n").unwrap();
+    std::fs::write(
+        &rustup,
+        r#"#!/bin/sh
+printf '%s|%s|%s\n' "$*" "$RUSTUP_HOME" "${CARGO_HYPERLIGHT_REMOVED-unset}" >> "$HYPERLIGHT_TEST_RUSTUP_LOG"
+case "$1" in
+    toolchain) exit 0 ;;
+    which) printf '%s\n' "$HYPERLIGHT_TEST_BINARY" ;;
+    *) exit 1 ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&rustup, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    for clear in [false, true] {
+        std::fs::write(&log, "").unwrap();
+        let mut command = cargo_hyperlight::cargo().unwrap();
+        if clear {
+            command.env_clear();
+        }
+        command
+            .env("PATH", dir.path())
+            .env("RUSTUP_HOME", &home)
+            .env("RUSTUP_AUTO_INSTALL", "1")
+            .env("HYPERLIGHT_TEST_RUSTUP_LOG", &log)
+            .env("HYPERLIGHT_TEST_BINARY", std::env::current_exe().unwrap())
+            .env("CARGO_HYPERLIGHT_REMOVED", "remove-me")
+            .env_remove("CARGO_HYPERLIGHT_REMOVED")
+            .toolchain_file(&file)
+            .unwrap();
+        assert_eq!(command.get_program(), std::env::current_exe().unwrap());
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let expected = [
+            "toolchain install guest-test --no-update --no-self-update",
+            "which --toolchain guest-test cargo",
+            "which --toolchain guest-test rustc",
+            "which --toolchain guest-test rustdoc",
+        ]
+        .map(|args| format!("{args}|{}|unset\n", home.display()))
+        .concat();
+        assert_eq!(calls, expected);
     }
 }
 

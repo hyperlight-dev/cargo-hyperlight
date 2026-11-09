@@ -45,7 +45,7 @@ pub fn find_cargo() -> Result<CargoBinary> {
 }
 
 pub fn cargo_cmd(env: &HashMap<OsString, OsString>) -> Result<Command> {
-    let cargo = match env.get(OsStr::new("CARGO")) {
+    let cargo = match get_env_value(env, "CARGO") {
         Some(cargo) => PathBuf::from(cargo),
         None => find_cargo()?.path,
     };
@@ -63,25 +63,26 @@ pub(crate) struct GuestToolchain {
 }
 
 impl GuestToolchain {
-    pub fn from_file(path: &Path, auto_install: Option<&OsStr>) -> Result<Self> {
+    pub fn from_file(path: &Path, env: &HashMap<OsString, OsString>) -> Result<Self> {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read toolchain file {}", path.display()))?;
         let channel = parse_toolchain(&contents)
             .with_context(|| format!("Invalid toolchain file {}", path.display()))?;
-        let rustup = which::which("rustup").context("Toolchain selection requires rustup")?;
-        if rustup_auto_install_enabled(auto_install) {
+        let rustup = which::which_in("rustup", get_env_value(env, "PATH"), env::current_dir()?)
+            .context("Toolchain selection requires rustup")?;
+        if rustup_auto_install_enabled(get_env_value(env, "RUSTUP_AUTO_INSTALL")) {
             channel
                 .install_command(&rustup)
-                .env_remove("RUSTUP_AUTO_INSTALL")
-                .envs(auto_install.map(|value| ("RUSTUP_AUTO_INSTALL", value)))
+                .env_clear()
+                .envs(env)
                 .checked_output()
                 .context("Failed to install guest toolchain and components")?;
         }
         let channel = channel.channel;
         let binary = |name: &str| -> Result<PathBuf> {
             let output = Command::new(&rustup)
-                .env_remove("RUSTUP_AUTO_INSTALL")
-                .envs(auto_install.map(|value| ("RUSTUP_AUTO_INSTALL", value)))
+                .env_clear()
+                .envs(env)
                 .env("RUSTUP_TOOLCHAIN", &channel)
                 .args(["which", "--toolchain", &channel, name])
                 .checked_output()
@@ -113,14 +114,7 @@ impl GuestToolchain {
 
     pub fn apply_env(&self, env: &mut HashMap<OsString, OsString>) {
         for (key, value) in self.env_overrides() {
-            // Windows environment names are case-insensitive.
-            env.retain(|k, _| {
-                if cfg!(windows) {
-                    !k.eq_ignore_ascii_case(OsStr::new(key))
-                } else {
-                    k != key
-                }
-            });
+            env.retain(|k, _| !env_keys_equal(k, OsStr::new(key)));
             env.insert(key.into(), value.into());
         }
     }
@@ -144,7 +138,13 @@ struct Toolchain {
 impl Toolchain {
     fn install_command(&self, rustup: &Path) -> Command {
         let mut command = Command::new(rustup);
-        command.args(["toolchain", "install", &self.channel]);
+        command.args([
+            "toolchain",
+            "install",
+            &self.channel,
+            "--no-update",
+            "--no-self-update",
+        ]);
         if let Some(profile) = &self.profile {
             command.arg("--profile").arg(profile);
         }
@@ -310,17 +310,20 @@ impl CargoCmd for Command {
     }
 
     fn checked_output(&mut self) -> Result<CheckedOutput> {
-        let output = self.output();
-
-        let Ok(output) = output else {
-            bail!("Failed to execute command:\n{self:?}");
-        };
+        let command = format!(
+            "{:?} {:?}",
+            self.get_program(),
+            self.get_args().collect::<Vec<_>>()
+        );
+        let output = self
+            .output()
+            .with_context(|| format!("Failed to execute command:\n{command}"))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if let Some(code) = output.status.code() {
-                bail!("Command exited with code {code}:\n{self:?}\n{stderr}");
+                bail!("Command exited with code {code}:\n{command}\n{stderr}");
             } else {
-                bail!("Command terminated by signal:\n{self:?}\n{stderr}");
+                bail!("Command terminated by signal:\n{command}\n{stderr}");
             }
         }
 
@@ -420,6 +423,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn command_failures_do_not_print_environment() {
+        const KEY: &str = "CARGO_REGISTRIES_HYPERLIGHT_TEST_TOKEN";
+        const VALUE: &str = "dummy-credential-for-command-failure";
+        for program in [
+            std::env::current_exe().unwrap(),
+            PathBuf::from("cargo-hyperlight-nonexistent-executable"),
+        ] {
+            let error = Command::new(&program)
+                .arg("--invalid-cargo-hyperlight-test-flag")
+                .env(KEY, VALUE)
+                .checked_output()
+                .err()
+                .unwrap();
+            let diagnostic = format!("{error:#}");
+            assert!(diagnostic.contains(&format!("{program:?}")), "{diagnostic}");
+            assert!(
+                diagnostic.contains("--invalid-cargo-hyperlight-test-flag"),
+                "{diagnostic}"
+            );
+            assert!(!diagnostic.contains(KEY), "{diagnostic}");
+            assert!(!diagnostic.contains(VALUE), "{diagnostic}");
+            if program.is_file() {
+                assert!(
+                    diagnostic.contains("Command exited with code"),
+                    "{diagnostic}"
+                );
+                assert!(diagnostic.contains("Unrecognized option"), "{diagnostic}");
+            } else {
+                assert!(
+                    diagnostic.contains("Failed to execute command"),
+                    "{diagnostic}"
+                );
+                assert!(error.source().is_some(), "{diagnostic}");
+            }
+        }
+    }
+
+    #[test]
     fn environment_keys_follow_platform_case_rules() {
         let upper = OsStr::new("RUSTUP_AUTO_INSTALL");
         let lower = OsStr::new("rustup_auto_install");
@@ -468,6 +509,8 @@ mod tests {
                 "toolchain",
                 "install",
                 "1.94.1",
+                "--no-update",
+                "--no-self-update",
                 "--profile",
                 "minimal",
                 "--component",
@@ -511,6 +554,13 @@ mod tests {
             merge_env(std::iter::empty::<(&str, &str)>(), command.get_envs()),
             env
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn effective_cargo_lookup_is_case_insensitive() {
+        let env = HashMap::from([("cargo".into(), "guest-cargo".into())]);
+        assert_eq!(cargo_cmd(&env).unwrap().get_program(), "guest-cargo");
     }
 
     #[test]

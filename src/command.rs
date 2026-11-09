@@ -10,8 +10,7 @@ use os_str_bytes::OsStrBytesExt;
 
 use crate::CargoCommandExt;
 use crate::cargo_cmd::{
-    CargoBinary, CargoCmd as _, GuestToolchain, env_keys_equal, find_cargo, get_env_value,
-    merge_env,
+    CargoBinary, CargoCmd as _, GuestToolchain, env_keys_equal, find_cargo, merge_env,
 };
 use crate::cli::{Args, Warning};
 
@@ -148,7 +147,9 @@ impl Command {
     /// `RUSTUP_TOOLCHAIN` values, even after [`Self::env_clear`].
     /// No process-global environment is changed.
     /// Rustup installs the selected toolchain using the file's `components`,
-    /// `targets`, and `profile` settings. Sysroot preparation also ensures that
+    /// `targets`, and `profile` settings without updating installed toolchains
+    /// or Rustup itself. Selection uses the resolved environment, including
+    /// earlier `PATH` and `RUSTUP_HOME` overrides. Sysroot preparation also ensures that
     /// the `rust-src` component is installed.
     /// Set `RUSTUP_AUTO_INSTALL=0` in the parent environment or call
     /// `.env("RUSTUP_AUTO_INSTALL", "0")` before this method to use an installed
@@ -179,8 +180,7 @@ impl Command {
     /// ```
     pub fn toolchain_file(&mut self, path: impl AsRef<Path>) -> Result<&mut Self> {
         let env = self.resolve_env();
-        let auto_install = get_env_value(&env, "RUSTUP_AUTO_INSTALL");
-        let toolchain = GuestToolchain::from_file(path.as_ref(), auto_install)?;
+        let toolchain = GuestToolchain::from_file(path.as_ref(), &env)?;
         self.cargo.path = toolchain.cargo.clone();
         self.toolchain = Some(toolchain);
         Ok(self)
@@ -587,6 +587,7 @@ impl Command {
 
     fn resolve_env(&self) -> HashMap<OsString, OsString> {
         let mut env = merge_env(self.base_env(), self.get_envs());
+        env.retain(|name, _| !env_keys_equal(name, OsStr::new("CARGO")));
         env.insert("CARGO".into(), self.get_program().to_owned());
         if let Some(toolchain) = &self.toolchain {
             toolchain.apply_env(&mut env);
@@ -670,7 +671,10 @@ impl Command {
     /// ```
     pub fn get_program(&self) -> &OsStr {
         if self.toolchain.is_none()
-            && let Some(Some(cargo)) = self.envs.get(OsStr::new("CARGO"))
+            && let Some((_, Some(cargo))) = self
+                .envs
+                .iter()
+                .find(|(name, _)| env_keys_equal(name, OsStr::new("CARGO")))
         {
             return cargo;
         }
@@ -804,6 +808,34 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn cargo_override_uses_windows_case_rules() {
+        let mut command = Command::new().unwrap();
+        let captured = command.get_program().to_owned();
+        command
+            .env("CARGO", "first-cargo")
+            .env("cargo", "guest-cargo");
+        let env = command.resolve_env();
+        assert_eq!(command.get_program(), "guest-cargo");
+        assert_eq!(command.command().get_program(), "guest-cargo");
+        assert_eq!(
+            crate::cargo_cmd::cargo_cmd(&env).unwrap().get_program(),
+            "guest-cargo"
+        );
+        assert_eq!(
+            env.keys()
+                .filter(|name| env_keys_equal(name, OsStr::new("CARGO")))
+                .count(),
+            1
+        );
+        command.env_remove("CaRgO");
+        assert_eq!(command.get_program(), captured);
+        assert_eq!(command.command().get_program(), captured);
+        command.env("cargo", "guest-cargo").env_clear();
+        assert_eq!(command.get_program(), captured);
+    }
+
     #[test]
     fn selected_toolchain_does_not_print_inherited_credentials() {
         const KEY: &str = "CARGO_REGISTRIES_HYPERLIGHT_TEST_TOKEN";
@@ -831,6 +863,7 @@ mod tests {
         std::fs::write(&file, format!("[toolchain]\nchannel = {channel:?}")).unwrap();
         let mut command = Command::new().unwrap();
         command
+            .env("RUSTUP_AUTO_INSTALL", "0")
             .toolchain_file(file)
             .unwrap()
             .env("CARGO", "unavailable-host-cargo")

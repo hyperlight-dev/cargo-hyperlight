@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::ops::Not as _;
 use std::path::PathBuf;
 use std::process::{Output, Stdio};
@@ -18,7 +17,7 @@ const LIB_RS: &str = include_str!("dummy/_lib.rs");
 pub(crate) const UNSTABLE_TARGET_SPEC_FLAG: &str = "-Zunstable-options";
 
 fn rust_src_install_command(args: &Args) -> Option<std::process::Command> {
-    let toolchain = args.env.get(OsStr::new("RUSTUP_TOOLCHAIN"))?;
+    let toolchain = get_env_value(&args.env, "RUSTUP_TOOLCHAIN")?;
     if !rustup_auto_install_enabled(get_env_value(&args.env, "RUSTUP_AUTO_INSTALL")) {
         return None;
     }
@@ -54,7 +53,7 @@ fn cargo_version(args: &Args) -> Result<semver::Version> {
 /// Asks rustc to print the configuration of the hyperlight target, which forces
 /// it to load the custom target specification from the sysroot.
 fn probe_target_spec(args: &Args, extra_flags: &[&str]) -> Result<Output> {
-    let rustc = match args.env.get(OsStr::new("RUSTC")) {
+    let rustc = match get_env_value(&args.env, "RUSTC") {
         Some(rustc) => PathBuf::from(rustc),
         None => which::which("rustc").context("Failed to find rustc")?,
     };
@@ -312,6 +311,81 @@ fn get_spec(args: &Args, triplet: impl AsRef<str>) -> Result<Map<String, Value>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn rust_src_install_failure_does_not_print_inherited_credentials() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const KEY: &str = "CARGO_REGISTRIES_HYPERLIGHT_TEST_TOKEN";
+        const VALUE: &str = "dummy-inherited-credential-for-install-failure";
+        if std::env::var_os(KEY).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sysroot::tests::rust_src_install_failure_does_not_print_inherited_credentials",
+                ])
+                .env(KEY, VALUE)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let rustup = dir.path().join("rustup");
+        std::fs::write(
+            &rustup,
+            "#!/bin/sh\necho 'dummy rust-src install failure' >&2\nexit 42\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&rustup, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut command = crate::cargo().unwrap();
+        command
+            .env("PATH", dir.path())
+            .env("RUSTUP_TOOLCHAIN", "guest-toolchain")
+            .env("RUSTUP_AUTO_INSTALL", "1");
+        let args = command.build_args();
+        assert_eq!(
+            get_env_value(&args.env, KEY),
+            Some(std::ffi::OsStr::new(VALUE))
+        );
+        let error = rust_src_install_command(&args)
+            .unwrap()
+            .checked_output()
+            .err()
+            .unwrap();
+        let diagnostic = format!("{error:#}");
+        for expected in [
+            "rustup",
+            "rust-src",
+            "guest-toolchain",
+            "code 42",
+            "dummy rust-src install failure",
+        ] {
+            assert!(diagnostic.contains(expected), "{diagnostic}");
+        }
+        assert!(!diagnostic.contains(KEY), "{diagnostic}");
+        assert!(!diagnostic.contains(VALUE), "{diagnostic}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rust_src_toolchain_lookup_is_case_insensitive() {
+        let mut command = crate::cargo().unwrap();
+        command
+            .env("rustup_toolchain", "guest-toolchain")
+            .env("rustup_auto_install", "1");
+        let install = rust_src_install_command(&command.build_args()).unwrap();
+        assert_eq!(
+            install.get_args().last(),
+            Some(std::ffi::OsStr::new("guest-toolchain"))
+        );
+    }
 
     #[test]
     fn rust_src_provisioning_uses_guest_environment() {
