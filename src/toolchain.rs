@@ -61,9 +61,7 @@ fn find_package_dir(metadata: &CargoMetadata, name: &str) -> Result<Option<PathB
 }
 
 fn find_package_dirs(args: &Args) -> Result<PackageDirectories> {
-    let metadata = cargo_cmd()?
-        .env_clear()
-        .envs(args.env.iter())
+    let metadata = cargo_cmd(&args.env)?
         .current_dir(&args.current_dir)
         .arg("metadata")
         .manifest_path(&args.manifest_path)
@@ -93,9 +91,7 @@ fn copy_includes(src_dirs: impl Iterator<Item: AsRef<Path>>, dst_dir: &Path) -> 
 
 fn build_guest_capi(args: &Args, capi_dir: &Path) -> Result<()> {
     use crate::CargoCommandExt;
-    let output = cargo_cmd()?
-        .env_clear()
-        .envs(args.env.iter())
+    let output = cargo_cmd(&args.env)?
         .arg("build")
         .manifest_path(&Some(capi_dir.join("Cargo.toml")))
         .target_dir(args.build_dir())
@@ -186,9 +182,7 @@ fn build_wrappers(args: &Args) -> Result<()> {
         .to_string(),
     )?;
 
-    let output = cargo_cmd()?
-        .env_clear()
-        .envs(args.env.iter())
+    let output = cargo_cmd(&args.env)?
         .current_dir(&args.current_dir)
         .arg("build")
         .target(&args.host)

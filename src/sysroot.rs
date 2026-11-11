@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::ops::Not as _;
 use std::path::PathBuf;
 use std::process::{Output, Stdio};
@@ -6,7 +5,7 @@ use std::process::{Output, Stdio};
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Map, Value, json};
 
-use crate::cargo_cmd::{CargoCmd, cargo_cmd};
+use crate::cargo_cmd::{CargoCmd, cargo_cmd, get_env_value, rustup_auto_install_enabled};
 use crate::cli::Args;
 
 const CARGO_TOML: &str = include_str!("dummy/_Cargo.toml");
@@ -17,11 +16,23 @@ const LIB_RS: &str = include_str!("dummy/_lib.rs");
 /// nightly channel and only when this flag is passed.
 pub(crate) const UNSTABLE_TARGET_SPEC_FLAG: &str = "-Zunstable-options";
 
+fn rust_src_install_command(args: &Args) -> Option<std::process::Command> {
+    let toolchain = get_env_value(&args.env, "RUSTUP_TOOLCHAIN")?;
+    if !rustup_auto_install_enabled(get_env_value(&args.env, "RUSTUP_AUTO_INSTALL")) {
+        return None;
+    }
+    let mut command = std::process::Command::new("rustup");
+    command
+        .env_clear()
+        .envs(&args.env)
+        .args(["--quiet", "component", "add", "rust-src", "--toolchain"])
+        .arg(toolchain);
+    Some(command)
+}
+
 /// Queries the version of the cargo release in use.
 fn cargo_version(args: &Args) -> Result<semver::Version> {
-    let output = cargo_cmd()?
-        .env_clear()
-        .envs(args.env.iter())
+    let output = cargo_cmd(&args.env)?
         .current_dir(&args.current_dir)
         .arg("version")
         .arg("--verbose")
@@ -42,7 +53,7 @@ fn cargo_version(args: &Args) -> Result<semver::Version> {
 /// Asks rustc to print the configuration of the hyperlight target, which forces
 /// it to load the custom target specification from the sysroot.
 fn probe_target_spec(args: &Args, extra_flags: &[&str]) -> Result<Output> {
-    let rustc = match args.env.get(OsStr::new("RUSTC")) {
+    let rustc = match get_env_value(&args.env, "RUSTC") {
         Some(rustc) => PathBuf::from(rustc),
         None => which::which("rustc").context("Failed to find rustc")?,
     };
@@ -194,23 +205,15 @@ Supported values are:
         .context("Failed to write Cargo.toml")?;
     std::fs::write(crate_dir.join("lib.rs"), LIB_RS).context("Failed to write lib.rs")?;
 
-    // if we are using rustup, ensure that the rust-src component is installed
-    if let Some(rustup_toolchain) = std::env::var_os("RUSTUP_TOOLCHAIN") {
-        std::process::Command::new("rustup")
-            .arg("--quiet")
-            .arg("component")
-            .arg("add")
-            .arg("rust-src")
-            .arg("--toolchain")
-            .arg(rustup_toolchain)
+    // Install rust-src only when rustup provisioning is enabled.
+    if let Some(mut command) = rust_src_install_command(args) {
+        command
             .checked_output()
             .context("Failed to get Rust's std lib sources")?;
     }
 
     // Build the sysroot
-    let output = cargo_cmd()?
-        .env_clear()
-        .envs(args.env.iter())
+    let output = cargo_cmd(&args.env)?
         .current_dir(&args.current_dir)
         .arg("build")
         .target(&args.target)
@@ -287,9 +290,7 @@ Supported values are:
 }
 
 fn get_spec(args: &Args, triplet: impl AsRef<str>) -> Result<Map<String, Value>> {
-    let output = cargo_cmd()?
-        .env_clear()
-        .envs(args.env.iter())
+    let output = cargo_cmd(&args.env)?
         .current_dir(&args.current_dir)
         .arg("rustc")
         .arg("--target")
@@ -305,4 +306,118 @@ fn get_spec(args: &Args, triplet: impl AsRef<str>) -> Result<Map<String, Value>>
         .context("Failed to get base target spec")?;
 
     serde_json::from_slice(&output.stdout).context("Failed to parse target spec JSON")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn rust_src_install_failure_does_not_print_inherited_credentials() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const KEY: &str = "CARGO_REGISTRIES_HYPERLIGHT_TEST_TOKEN";
+        const VALUE: &str = "dummy-inherited-credential-for-install-failure";
+        if std::env::var_os(KEY).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sysroot::tests::rust_src_install_failure_does_not_print_inherited_credentials",
+                ])
+                .env(KEY, VALUE)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let rustup = dir.path().join("rustup");
+        std::fs::write(
+            &rustup,
+            "#!/bin/sh\necho 'dummy rust-src install failure' >&2\nexit 42\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&rustup, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut command = crate::cargo().unwrap();
+        command
+            .env("PATH", dir.path())
+            .env("RUSTUP_TOOLCHAIN", "guest-toolchain")
+            .env("RUSTUP_AUTO_INSTALL", "1");
+        let args = command.build_args();
+        assert_eq!(
+            get_env_value(&args.env, KEY),
+            Some(std::ffi::OsStr::new(VALUE))
+        );
+        let error = rust_src_install_command(&args)
+            .unwrap()
+            .checked_output()
+            .err()
+            .unwrap();
+        let diagnostic = format!("{error:#}");
+        for expected in [
+            "rustup",
+            "rust-src",
+            "guest-toolchain",
+            "code 42",
+            "dummy rust-src install failure",
+        ] {
+            assert!(diagnostic.contains(expected), "{diagnostic}");
+        }
+        assert!(!diagnostic.contains(KEY), "{diagnostic}");
+        assert!(!diagnostic.contains(VALUE), "{diagnostic}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rust_src_toolchain_lookup_is_case_insensitive() {
+        let mut command = crate::cargo().unwrap();
+        command
+            .env("rustup_toolchain", "guest-toolchain")
+            .env("rustup_auto_install", "1");
+        let install = rust_src_install_command(&command.build_args()).unwrap();
+        assert_eq!(
+            install.get_args().last(),
+            Some(std::ffi::OsStr::new("guest-toolchain"))
+        );
+    }
+
+    #[test]
+    fn rust_src_provisioning_uses_guest_environment() {
+        let mut command = crate::cargo().unwrap();
+        command
+            .env_clear()
+            .env("RUSTUP_TOOLCHAIN", "guest-toolchain")
+            .env("RUSTUP_AUTO_INSTALL", "0");
+        assert!(rust_src_install_command(&command.build_args()).is_none());
+
+        for value in [Some("1"), None] {
+            if let Some(value) = value {
+                command.env("RUSTUP_AUTO_INSTALL", value);
+            } else {
+                command.env_remove("RUSTUP_AUTO_INSTALL");
+            }
+            let install = rust_src_install_command(&command.build_args()).unwrap();
+            assert_eq!(install.get_program(), "rustup");
+            assert_eq!(
+                install.get_args().collect::<Vec<_>>(),
+                [
+                    "--quiet",
+                    "component",
+                    "add",
+                    "rust-src",
+                    "--toolchain",
+                    "guest-toolchain"
+                ]
+            );
+        }
+
+        command.env_remove("RUSTUP_TOOLCHAIN");
+        assert!(rust_src_install_command(&command.build_args()).is_none());
+    }
 }

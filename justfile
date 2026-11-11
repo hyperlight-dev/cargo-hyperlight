@@ -34,7 +34,11 @@ test-new:
 test-clang-parser:
     cargo test --test clang_parser
 
-test: test-new test-clang-parser
+test-toolchain: build-guest
+    cargo test --lib
+    cargo test --test toolchain_file
+
+test: test-new test-clang-parser test-toolchain
 
 build-c-sysroot:
     cargo hyperlight build-c-sysroot --manifest-path examples/c/fetch-capi/Cargo.toml --c-sysroot-dir examples/c/sysroot

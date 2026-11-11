@@ -87,6 +87,60 @@ Your binary will be built for the `x86_64-hyperlight-none` target (or `aarch64-h
 
 There's no need for any extra configuration, the command will take care of everything.
 
+## Selecting a guest toolchain from Rust
+
+When calling cargo-hyperlight as a library (for example from a host `build.rs`),
+select the guest's toolchain explicitly:
+
+```rust,no_run
+fn main() -> anyhow::Result<()> {
+    cargo_hyperlight::cargo()?
+        .toolchain_file("guest/rust-toolchain.toml")?
+        .env_clear_cargo()
+        .current_dir("guest")
+        .arg("build")
+        .status()
+}
+```
+
+For example, a newer host compiler can build a guest pinned to Rust 1.94.1:
+
+```toml
+[toolchain]
+channel = "1.94.1"
+components = ["rust-src"]
+```
+
+`toolchain_file` reads the TOML file immediately and returns an error if it is
+invalid, unreadable, or rustup cannot provision the toolchain. Relative file paths resolve
+against the calling process's current directory, independently of `current_dir`.
+The selection overrides `CARGO`, `RUSTC`, `RUSTDOC`, and `RUSTUP_TOOLCHAIN` for
+preparation and the final guest command, including after environment clearing.
+Rustup installs the selected toolchain using the file's `components`, `targets`,
+and `profile` settings without updating installed toolchains or Rustup itself.
+Selection uses the builder's resolved environment, including any `PATH` and
+`RUSTUP_HOME` settings made before `toolchain_file`.
+Sysroot preparation also installs `rust-src` when needed.
+The parent process environment is unchanged. Select a Rust version using `channel`;
+selecting a local compiler directory using `[toolchain].path` is not supported.
+
+To disable toolchain and component installation, set `RUSTUP_AUTO_INSTALL=0` in
+your shell. Library calls inherit this setting:
+
+```sh
+RUSTUP_AUTO_INSTALL=0 cargo build
+```
+
+For library usage, you can also call `.env("RUSTUP_AUTO_INSTALL", "0")` **before**
+`.toolchain_file(...)`. Explicit settings override the inherited value. The file
+is processed during the `toolchain_file` call, so settings made afterwards cannot
+prevent installation that has already happened.
+
+With installation disabled, the toolchain file still selects the Rust version.
+The requested toolchain, required components (including `rust-src`), and targets
+must already be installed; missing prerequisites cause an error. Sysroot
+preparation uses the same environment setting to decide whether to install `rust-src`.
+
 ## Building C Guests
 
 cargo-hyperlight also supports building C guest binaries. To get the compiler and linker flags needed to build a C guest, use:
