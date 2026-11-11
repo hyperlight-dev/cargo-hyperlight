@@ -45,6 +45,7 @@ jobs:
         # and does not apply `--cap-lints allow`. A warning in any of them would
         # then fail the build. Lints are enforced by the `check` job instead.
         rustflags: ""
+        build-warnings: ""
     - uses: Swatinem/rust-cache@v2
     - uses: extractions/setup-just@v4
     - name: Enable kvm
@@ -110,6 +111,7 @@ jobs:
         with:
           # See the comment in the `run-tests` job.
           rustflags: ""
+          build-warnings: ""
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v4
       - name: Install cargo-hyperlight
@@ -186,6 +188,7 @@ jobs:
           # See the comment in the `run-tests` job. `just fmt` and `just clippy`
           # pass `-D warnings` explicitly where it is wanted.
           rustflags: ""
+          build-warnings: ""
       - uses: extractions/setup-just@v4
       - name: Setup nightly toolchain
         shell: bash
