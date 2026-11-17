@@ -11,7 +11,6 @@ description = "cargo subcommand to build hyperlight guest binaries"
 anyhow = "1.0"
 clap = { version = "4", features = ["derive"] }
 console = "0.16"
-const_format = "0.2"
 glob = "0.3"
 libc = "0.2"
 object = { version = "0.40", default-features = false, features = ["read", "elf"] }
@@ -26,3 +25,4 @@ toml = "1.0"
 which = { version = "8", features = ["regex"] }
 quote = "1.0"
 proc-macro2 = "1.0"
+rustc_version = "0.4.1"

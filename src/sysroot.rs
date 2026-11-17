@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::process::{Output, Stdio};
 
 use anyhow::{Context, Result, bail, ensure};
-use serde_json::{Map, Value, json};
 
 use crate::cargo_cmd::{CargoCmd, cargo_cmd, get_env_value, rustup_auto_install_enabled};
 use crate::cli::Args;
@@ -65,7 +64,7 @@ fn probe_target_spec(args: &Args, extra_flags: &[&str]) -> Result<Output> {
         .arg("--sysroot")
         .arg(args.sysroot_dir())
         .arg("--target")
-        .arg(&args.target)
+        .arg::<&str>(args.target.as_ref())
         .args(extra_flags)
         .arg("--print=cfg")
         .stdin(Stdio::null())
@@ -135,54 +134,6 @@ pub(crate) struct CargoBuildMessage {
 pub fn build(args: &mut Args) -> Result<()> {
     let cargo_version = cargo_version(args)?;
 
-    let target_spec = match args.target.as_str() {
-        "x86_64-hyperlight-none" => {
-            let mut spec = get_spec(args, "x86_64-unknown-none")?;
-            // entry_name seems to be ignored, use RUSTFLAGS with -Clink-args=-eentrypoint instead
-            //spec.entry_name = Some("entrypoint".into());
-            let Value::Object(custom) = json!({
-                "code-model": "small",
-                "linker": "rust-lld",
-                "linker-flavor": "gnu-lld",
-                "pre-link-args": {
-                    "gnu-lld": ["-znostart-stop-gc"],
-                },
-                "features": "-mmx,+sse,+sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2,-soft-float"
-            }) else {
-                unreachable!()
-            };
-            spec.extend(custom);
-            spec.remove("rustc-abi");
-            spec
-        }
-        "aarch64-hyperlight-none" => {
-            let mut spec = get_spec(args, "aarch64-unknown-none")?;
-            let Value::Object(custom) = json!({
-                "code-model": "small",
-                "linker": "rust-lld",
-                "linker-flavor": "gnu-lld",
-                "pre-link-args": {
-                    "gnu-lld": ["-znostart-stop-gc"],
-                },
-                "relocation-model": "pic",
-                "direct-access-external-data": true,
-                "position-independent-executables": true,
-                "features": "+v8.1a,+strict-align,+neon,+fp-armv8"
-            }) else {
-                unreachable!()
-            };
-            spec.extend(custom);
-            spec.remove("rustc-abi");
-            spec
-        }
-        triplet => bail!(
-            "Unsupported target triple: {triplet:?}
-Supported values are:
- * x86_64-hyperlight-none
- * aarch64-hyperlight-none"
-        ),
-    };
-
     let sysroot_dir = args.sysroot_dir();
     let target_dir = args.build_dir();
     let triplet_dir = args.triplet_dir();
@@ -190,11 +141,8 @@ Supported values are:
     let lib_dir = args.rust_libs_dir();
 
     std::fs::create_dir_all(&triplet_dir).context("Failed to create sysroot directories")?;
-    std::fs::write(
-        triplet_dir.join("target.json"),
-        serde_json::to_string_pretty(&target_spec).unwrap(),
-    )
-    .context("Failed to write target spec file")?;
+
+    args.target.write_spec(args, &triplet_dir)?;
 
     check_target_spec_support(args)?;
 
@@ -287,25 +235,6 @@ Supported values are:
     }
 
     Ok(())
-}
-
-fn get_spec(args: &Args, triplet: impl AsRef<str>) -> Result<Map<String, Value>> {
-    let output = cargo_cmd(&args.env)?
-        .current_dir(&args.current_dir)
-        .arg("rustc")
-        .arg("--target")
-        .arg(triplet.as_ref())
-        .manifest_path(&args.manifest_path)
-        .arg("-Zunstable-options")
-        .arg("--print=target-spec-json")
-        .arg("--")
-        .arg("-Zunstable-options")
-        // printing target-spec-json is an unstable feature
-        .allow_unstable()
-        .checked_output()
-        .context("Failed to get base target spec")?;
-
-    serde_json::from_slice(&output.stdout).context("Failed to parse target spec JSON")
 }
 
 #[cfg(test)]
